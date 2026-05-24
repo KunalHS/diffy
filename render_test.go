@@ -299,6 +299,35 @@ func TestLayoutToggleWritesState(t *testing.T) {
 	}
 }
 
+func TestPickerOverlayFiltersTypedInput(t *testing.T) {
+	model := tuiModel{
+		overlay:     overlayBranch,
+		pickerTitle: "Choose target branch",
+	}
+	model.setPickerItems([]string{"main", "use-1234-qa", "feature/kumar-debug"})
+
+	updated, _ := model.updateOverlayKey("u")
+	filtered := updated.(tuiModel)
+	if filtered.pickerFilter != "u" {
+		t.Fatalf("filter = %q, want u", filtered.pickerFilter)
+	}
+	if len(filtered.pickerItems) != 2 {
+		t.Fatalf("filtered items = %#v, want two u matches", filtered.pickerItems)
+	}
+
+	updated, _ = filtered.updateOverlayKey("k")
+	filtered = updated.(tuiModel)
+	if filtered.pickerFilter != "uk" {
+		t.Fatalf("k should type into filter, got filter %q", filtered.pickerFilter)
+	}
+
+	updated, _ = filtered.updateOverlayKey("backspace")
+	filtered = updated.(tuiModel)
+	if filtered.pickerFilter != "u" {
+		t.Fatalf("backspace filter = %q, want u", filtered.pickerFilter)
+	}
+}
+
 func TestGitCommandShownAtBottomOfSidebarWhenToggled(t *testing.T) {
 	model := tuiModel{
 		width:       80,

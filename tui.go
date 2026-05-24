@@ -45,32 +45,34 @@ type tuiModel struct {
 	cmd        Command
 	view       ViewData
 
-	width         int
-	height        int
-	cursor        int
-	stashCursor   int
-	commitCursor  int
-	scroll        int
-	hScroll       int
-	layout        Layout
-	overlay       overlayKind
-	pickerTitle   string
-	pickerItems   []string
-	pickerCursor  int
-	pickerScroll  int
-	promptKind    promptKind
-	promptTitle   string
-	input         string
-	confirmText   string
-	confirmCmd    []string
-	message       string
-	err           string
-	lastHistory   *Command
-	showSidebar   bool
-	showGitCmd    bool
-	diffFocused   bool
-	expandedDiff  map[string]bool
-	expandAllDiff bool
+	width          int
+	height         int
+	cursor         int
+	stashCursor    int
+	commitCursor   int
+	scroll         int
+	hScroll        int
+	layout         Layout
+	overlay        overlayKind
+	pickerTitle    string
+	pickerAllItems []string
+	pickerItems    []string
+	pickerFilter   string
+	pickerCursor   int
+	pickerScroll   int
+	promptKind     promptKind
+	promptTitle    string
+	input          string
+	confirmText    string
+	confirmCmd     []string
+	message        string
+	err            string
+	lastHistory    *Command
+	showSidebar    bool
+	showGitCmd     bool
+	diffFocused    bool
+	expandedDiff   map[string]bool
+	expandAllDiff  bool
 }
 
 func RunTUI(cmd Command, cfg Config, state DiffyState) error {
@@ -233,8 +235,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.overlay = overlayModes
 		m.pickerTitle = "Modes"
-		m.pickerItems = []string{"Local changes", "Compare/review branches", "Ahead of upstream", "Behind upstream", "Recent commits", "File compare", "Stash", "File history", "Commit view"}
-		m.pickerCursor = 0
+		m.setPickerItems([]string{"Local changes", "Compare/review branches", "Ahead of upstream", "Behind upstream", "Recent commits", "File compare", "Stash", "File history", "Commit view"})
 	case "1":
 		m.layout = LayoutUnified
 		m.rememberLayout()
@@ -263,16 +264,23 @@ func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			m.closeOverlay()
-		case "up", "k":
+		case "backspace":
+			m.removePickerFilterRune()
+		case "up":
 			if m.pickerCursor > 0 {
 				m.pickerCursor--
 			}
-		case "down", "j":
+		case "down":
 			if m.pickerCursor < len(m.pickerItems)-1 {
 				m.pickerCursor++
 			}
 		case "enter":
 			m.choosePicker()
+		default:
+			if len([]rune(key)) == 1 {
+				m.pickerFilter += key
+				m.applyPickerFilter()
+			}
 		}
 	case overlayPrompt:
 		switch key {
@@ -356,7 +364,7 @@ func (m tuiModel) updateOverlayMouse(msg tea.MouseMsg) tuiModel {
 		switch m.overlay {
 		case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
 			_, top, _, _ := m.overlayBounds()
-			idx := msg.Y - top - 4
+			idx := msg.Y - top - 5
 			if idx >= 0 && idx < len(m.pickerItems) {
 				m.pickerCursor = idx
 				m.choosePicker()
@@ -536,17 +544,21 @@ func (m tuiModel) renderOverlay() string {
 	switch m.overlay {
 	case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
 		var lines []string
-		lines = append(lines, m.pickerTitle, "")
-		for i, item := range m.pickerItems {
-			line := item
-			if i == m.pickerCursor {
-				line = styleSelected.Render("> " + item)
-			} else {
-				line = "  " + item
+		lines = append(lines, m.pickerTitle, "filter: "+m.pickerFilter, "")
+		if len(m.pickerItems) == 0 {
+			lines = append(lines, styleMuted.Render("  no matches"))
+		} else {
+			for i, item := range m.pickerItems {
+				line := item
+				if i == m.pickerCursor {
+					line = styleSelected.Render("> " + item)
+				} else {
+					line = "  " + item
+				}
+				lines = append(lines, line)
 			}
-			lines = append(lines, line)
 		}
-		lines = append(lines, "", "enter select   esc cancel")
+		lines = append(lines, "", "type filter   up/down move   backspace edit   enter select   esc cancel")
 		return stylePopup.Render(strings.Join(lines, "\n"))
 	case overlayPrompt:
 		return stylePopup.Render(m.promptTitle + "\n\n" + m.input + "\n\nenter submit   esc cancel")
@@ -758,20 +770,53 @@ func (m *tuiModel) openBranchPicker(title string) {
 	}
 	m.overlay = overlayBranch
 	m.pickerTitle = title
-	m.pickerItems = items
-	m.pickerCursor = 0
+	m.setPickerItems(items)
 }
 
 func (m *tuiModel) openFilePicker(title string, items []string) {
 	m.overlay = overlayFile
 	m.pickerTitle = title
-	m.pickerItems = items
+	m.setPickerItems(items)
+}
+
+func (m *tuiModel) setPickerItems(items []string) {
+	m.pickerAllItems = append([]string(nil), items...)
+	m.pickerFilter = ""
 	m.pickerCursor = 0
+	m.applyPickerFilter()
+}
+
+func (m *tuiModel) applyPickerFilter() {
+	query := strings.ToLower(strings.TrimSpace(m.pickerFilter))
+	if query == "" {
+		m.pickerItems = append([]string(nil), m.pickerAllItems...)
+	} else {
+		m.pickerItems = m.pickerItems[:0]
+		for _, item := range m.pickerAllItems {
+			if strings.Contains(strings.ToLower(item), query) {
+				m.pickerItems = append(m.pickerItems, item)
+			}
+		}
+	}
+	if m.pickerCursor >= len(m.pickerItems) {
+		m.pickerCursor = 0
+	}
+	if m.pickerCursor < 0 {
+		m.pickerCursor = 0
+	}
+}
+
+func (m *tuiModel) removePickerFilterRune() {
+	if m.pickerFilter == "" {
+		return
+	}
+	runes := []rune(m.pickerFilter)
+	m.pickerFilter = string(runes[:len(runes)-1])
+	m.applyPickerFilter()
 }
 
 func (m *tuiModel) choosePicker() {
 	if m.pickerCursor < 0 || m.pickerCursor >= len(m.pickerItems) {
-		m.closeOverlay()
 		return
 	}
 	value := m.pickerItems[m.pickerCursor]
@@ -919,8 +964,7 @@ func (m *tuiModel) openChangedFilesForSelectedCommit() {
 	}
 	m.overlay = overlayChangedFiles
 	m.pickerTitle = "Files changed in " + commit
-	m.pickerItems = files
-	m.pickerCursor = 0
+	m.setPickerItems(files)
 }
 
 func (m *tuiModel) anchorCommit(hash string) {
@@ -1052,6 +1096,8 @@ func (m *tuiModel) loadStash() {
 func (m *tuiModel) closeOverlay() {
 	m.overlay = overlayNone
 	m.pickerItems = nil
+	m.pickerAllItems = nil
+	m.pickerFilter = ""
 	m.input = ""
 }
 
