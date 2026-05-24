@@ -874,6 +874,23 @@ func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 	}
 }
 
+func TestLeavingDiffFocusClearsDiffSearch(t *testing.T) {
+	model := tuiModel{
+		diffFocused: true,
+		diffSearch:  "needle",
+		diffCurrent: 2,
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	blurred := updated.(tuiModel)
+	if blurred.diffFocused {
+		t.Fatalf("enter should return focus to sidebar")
+	}
+	if blurred.diffSearchVisible() || blurred.diffCurrent != -1 {
+		t.Fatalf("leaving diff focus should clear diff search: query=%q editing=%t current=%d", blurred.diffSearch, blurred.diffEditing, blurred.diffCurrent)
+	}
+}
+
 func TestDiffFocusedJKScrollsByLineStep(t *testing.T) {
 	model := tuiModel{diffFocused: true}
 

@@ -177,7 +177,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.diffFocused {
-			m.diffFocused = false
+			m.blurDiff()
 			return m, nil
 		}
 		if m.canClearFileRestriction() {
@@ -255,7 +255,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if m.diffFocused {
-			m.diffFocused = false
+			m.blurDiff()
 		} else {
 			m.focusDiff()
 		}
@@ -883,6 +883,13 @@ func (m *tuiModel) focusDiff() {
 		return
 	}
 	m.diffFocused = true
+}
+
+func (m *tuiModel) blurDiff() {
+	m.diffFocused = false
+	m.diffSearch = ""
+	m.diffEditing = false
+	m.diffCurrent = -1
 }
 
 func (m *tuiModel) openInlineSearch() {
