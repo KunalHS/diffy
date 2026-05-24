@@ -97,7 +97,7 @@ The bottom shortcut bar is part of the product. It should show the actions that 
 Example shortcut hints:
 
 ```text
-q quit    m modes     enter open    esc back    j/k move    space select
+q quit    m modes     / search      enter open    esc back    j/k move
 s sidebar f files     h hunks       w wrap
 1 unified  2 split     n next         p previous  ? help
 ```

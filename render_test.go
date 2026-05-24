@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestSplitRenderUsesFullWidthForNewFileAdditions(t *testing.T) {
@@ -300,6 +301,260 @@ func TestModeShortcutIsM(t *testing.T) {
 	bottom := model.renderBottom()
 	if !strings.Contains(bottom, "m modes") || strings.Contains(bottom, "/ modes") {
 		t.Fatalf("bottom hint = %q, want m modes only", bottom)
+	}
+}
+
+func TestSlashSearchesSidebar(t *testing.T) {
+	model := tuiModel{
+		cmd: Command{Kind: KindFile},
+		view: ViewData{
+			Files: []FileStat{
+				{Path: "src/App.java", Add: 1},
+				{Path: "src/Thing.java", Add: 2},
+			},
+			Diff: "existing diff",
+		},
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	searching := updated.(tuiModel)
+	if searching.overlay != overlayNone || !searching.sidebarEditing {
+		t.Fatalf("slash state = overlay %v editing %t, want inline sidebar search", searching.overlay, searching.sidebarEditing)
+	}
+
+	for _, r := range "thing" {
+		updated, _ = searching.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		searching = updated.(tuiModel)
+	}
+	if got := searching.sidebarDisplayIndices(len(searching.view.Files)); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("live sidebar filter = %#v, want only row 1", got)
+	}
+	if searching.cursor != 1 {
+		t.Fatalf("sidebar search cursor = %d, want matching row 1", searching.cursor)
+	}
+	if searching.diffFocused {
+		t.Fatalf("sidebar search should leave focus on sidebar")
+	}
+
+	sidebar := searching.renderSidebar(40, 8)
+	if !strings.Contains(sidebar, "/ thing") || strings.Contains(sidebar, "/ files:") || strings.Contains(sidebar, "App.java") {
+		t.Fatalf("sidebar search render did not show locked filter state:\n%s", sidebar)
+	}
+
+	updated, _ = searching.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	locked := updated.(tuiModel)
+	if locked.sidebarEditing || locked.sidebarSearch != "thing" {
+		t.Fatalf("locked sidebar search = editing %t query %q, want locked query", locked.sidebarEditing, locked.sidebarSearch)
+	}
+
+	updated, _ = locked.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	cleared := updated.(tuiModel)
+	if cleared.sidebarSearchVisible() || len(cleared.sidebarDisplayIndices(len(cleared.view.Files))) != 2 {
+		t.Fatalf("esc did not clear sidebar search: query=%q editing=%t", cleared.sidebarSearch, cleared.sidebarEditing)
+	}
+}
+
+func TestSidebarSearchUsesVisibleFileNameNotHiddenPath(t *testing.T) {
+	model := tuiModel{
+		cmd: Command{Kind: KindLocal},
+		view: ViewData{
+			Files: []FileStat{
+				{Path: "core/src/main/java/com/ontic/core/topic/common/TopicType.java", Add: 1},
+				{Path: "core/src/main/java/com/ontic/core/watch/WatchConfigListeningJob.java", Add: 1},
+			},
+		},
+	}
+
+	model.sidebarSearch = "core"
+	got := model.sidebarDisplayIndices(len(model.view.Files))
+	if len(got) != 0 {
+		t.Fatalf("sidebar search matched hidden path segments: %#v", got)
+	}
+
+	model.sidebarSearch = "topic"
+	got = model.sidebarDisplayIndices(len(model.view.Files))
+	if len(got) != 1 || got[0] != 0 {
+		t.Fatalf("sidebar search should match visible file name text, got %#v", got)
+	}
+}
+
+func TestSlashSearchesRenderedDiffAndNMovesMatches(t *testing.T) {
+	diff := `diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,5 +1,5 @@
+ alpha
+-old one
++needle one
+ middle
+-old two
++needle two
+ omega`
+	model := tuiModel{
+		width:       100,
+		layout:      LayoutSplit,
+		diffFocused: true,
+		cmd:         Command{Kind: KindFile},
+		view:        ViewData{Diff: diff},
+	}
+	model.diffSearch = "needle"
+	matches := model.diffSearchOccurrences()
+	if len(matches) != 2 {
+		t.Fatalf("diff search matches = %#v, want two rendered matches", matches)
+	}
+	model.diffSearch = ""
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	searching := updated.(tuiModel)
+	if searching.overlay != overlayNone || !searching.diffEditing {
+		t.Fatalf("slash state = overlay %v editing %t, want inline diff search", searching.overlay, searching.diffEditing)
+	}
+
+	for _, r := range "needle" {
+		updated, _ = searching.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		searching = updated.(tuiModel)
+	}
+	main := searching.renderMain(100, 12)
+	if !strings.Contains(main, "/ needle") || strings.Contains(main, "/ diff:") {
+		t.Fatalf("diff search render missing inline search box:\n%s", main)
+	}
+
+	updated, _ = searching.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	locked := updated.(tuiModel)
+	if locked.diffEditing || locked.diffCurrent != 0 || locked.scroll != matches[0].Line || locked.hScroll != 0 || !locked.diffFocused {
+		t.Fatalf("diff search position = editing %t current %d scroll %d h %d focused %t, want first match line %d and focused", locked.diffEditing, locked.diffCurrent, locked.scroll, locked.hScroll, locked.diffFocused, matches[0].Line)
+	}
+
+	updated, _ = locked.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next := updated.(tuiModel)
+	if next.diffCurrent != 1 || next.scroll != matches[1].Line {
+		t.Fatalf("n search = current %d scroll %d, want second match line %d", next.diffCurrent, next.scroll, matches[1].Line)
+	}
+
+	updated, _ = next.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	prev := updated.(tuiModel)
+	if prev.diffCurrent != 0 || prev.scroll != matches[0].Line {
+		t.Fatalf("N search = current %d scroll %d, want first match line %d", prev.diffCurrent, prev.scroll, matches[0].Line)
+	}
+
+	updated, _ = prev.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	cleared := updated.(tuiModel)
+	if cleared.diffSearchVisible() || cleared.diffCurrent != -1 {
+		t.Fatalf("esc did not clear diff search: query=%q editing=%t current=%d", cleared.diffSearch, cleared.diffEditing, cleared.diffCurrent)
+	}
+	if cleared.message != "" {
+		t.Fatalf("clearing diff search should not add footer message, got %q", cleared.message)
+	}
+}
+
+func TestSearchHighlightStylesAreDistinct(t *testing.T) {
+	if fmt.Sprint(styleSearchMatch.GetBackground()) == fmt.Sprint(styleSearchCurrent.GetBackground()) {
+		t.Fatalf("current search match should use a different background from other matches")
+	}
+}
+
+func TestInlineSearchLinesAreCompact(t *testing.T) {
+	model := tuiModel{
+		cmd:            Command{Kind: KindLocal},
+		sidebarSearch:  "topic",
+		sidebarEditing: true,
+		diffSearch:     "override",
+		diffEditing:    true,
+		view: ViewData{Diff: `diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,1 +1,1 @@
+-old
++override`},
+	}
+
+	sidebarLine := model.renderSidebarSearchLine(40)
+	if strings.Contains(sidebarLine, "\n") || strings.Contains(sidebarLine, "files:") {
+		t.Fatalf("sidebar search line should be one compact unlabeled row: %q", sidebarLine)
+	}
+
+	diffLine := model.renderDiffSearchLine(60)
+	diffText := strings.TrimSpace(xansi.Strip(diffLine))
+	if strings.Contains(diffLine, "\n") || strings.Contains(diffLine, "diff:") {
+		t.Fatalf("diff search line should be one compact unlabeled row: %q", diffLine)
+	}
+	if !strings.HasPrefix(diffText, "/ override|") || !strings.HasSuffix(diffText, "1/1") {
+		t.Fatalf("diff search line should keep query and count on one row, got %q", diffText)
+	}
+}
+
+func TestSidebarSelectedSearchKeepsSelectionAndHighlight(t *testing.T) {
+	model := tuiModel{
+		cmd: Command{Kind: KindLocal},
+		view: ViewData{
+			Files: []FileStat{
+				{Path: "WatchConfigListeningJob.java", Add: 17, Del: 1},
+				{Path: "PublicRecordWatchConfigProcessor.java", Add: 19, Del: 2},
+			},
+		},
+		cursor:        1,
+		sidebarSearch: "watch",
+	}
+
+	sidebar := model.renderSidebar(44, 8)
+	if !strings.Contains(xansi.Strip(sidebar), "PublicRecordWatchConfigPr") {
+		t.Fatalf("sidebar lost selected row text:\n%s", sidebar)
+	}
+	if !strings.Contains(sidebar, styleSearchMatch.Render("Watch")) {
+		t.Fatalf("sidebar did not highlight selected row match:\n%s", sidebar)
+	}
+}
+
+func TestSearchClearDoesNotPolluteFooter(t *testing.T) {
+	model := tuiModel{
+		cmd:           Command{Kind: KindLocal},
+		sidebarSearch: "watch",
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	cleared := updated.(tuiModel)
+	if cleared.message != "" {
+		t.Fatalf("clearing sidebar search should not add footer message, got %q", cleared.message)
+	}
+	if strings.Contains(cleared.renderBottom(), "search cleared") {
+		t.Fatalf("footer should not include search cleared message: %q", cleared.renderBottom())
+	}
+}
+
+func TestDiffSearchIgnoresCollapsedContextLabels(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString(`diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,14 +1,14 @@
+-before
++after
+`)
+	for i := 0; i < 10; i++ {
+		builder.WriteString(" same content\n")
+	}
+	builder.WriteString(`-old end
++new end`)
+
+	model := tuiModel{
+		width:       120,
+		height:      24,
+		cmd:         Command{Kind: KindLocal},
+		layout:      LayoutSplit,
+		diffFocused: true,
+		diffSearch:  "lines",
+		view:        ViewData{Diff: builder.String()},
+	}
+
+	rendered := model.renderMain(120, 18)
+	if !strings.Contains(xansi.Strip(rendered), "unchanged lines") {
+		t.Fatalf("test setup should render collapsed context label:\n%s", rendered)
+	}
+	if matches := model.diffSearchOccurrences(); len(matches) != 0 {
+		t.Fatalf("diff search should ignore collapsed context labels, got %#v", matches)
+	}
+	if !strings.Contains(xansi.Strip(rendered), "/ lines") || !strings.Contains(xansi.Strip(rendered), "0/0") {
+		t.Fatalf("search status should show the query with no matches:\n%s", rendered)
 	}
 }
 

@@ -424,6 +424,20 @@ continue in compare view
 
 Because `m` is global, per-list filtering should use another key or only happen inside focused input controls.
 
+## Search
+
+Status: Approved
+
+`/` searches within the active pane:
+
+- Sidebar focus: show an inline search box in the sidebar and live-filter files, commits, or stashes.
+- Diff focus: show an inline search box in the diff pane and highlight rendered diff matches across both split panes or the unified view.
+- The inline box uses only `/` plus the query, without labels like `files:` or `diff:`.
+- Sidebar search: after locking a keyword, `j` and `k` move through filtered rows.
+- Diff search: after locking a keyword, `n` and `N` move to the next and previous match.
+- `esc` clears the active search.
+- Matching is case-insensitive.
+
 ## Recent Commits
 
 Status: Approved

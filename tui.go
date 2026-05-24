@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type overlayKind int
@@ -62,6 +64,11 @@ type tuiModel struct {
 	promptKind     promptKind
 	promptTitle    string
 	input          string
+	sidebarSearch  string
+	sidebarEditing bool
+	diffSearch     string
+	diffEditing    bool
+	diffCurrent    int
 	confirmText    string
 	confirmCmd     []string
 	message        string
@@ -158,10 +165,17 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.overlay != overlayNone {
 		return m.updateOverlayKey(key)
 	}
+	if m.sidebarEditing || m.diffEditing {
+		m.updateInlineSearchKey(key)
+		return m, nil
+	}
 	switch key {
 	case "q":
 		return m, tea.Quit
 	case "esc":
+		if m.clearInlineSearch() {
+			return m, nil
+		}
 		if m.diffFocused {
 			m.diffFocused = false
 			return m, nil
@@ -223,6 +237,16 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "pgdown", " ":
 		m.scroll += pageScrollStep
+	case "/":
+		m.openInlineSearch()
+	case "n":
+		if m.diffFocused && m.diffSearchLocked() {
+			m.jumpDiffSearch(1)
+		}
+	case "N":
+		if m.diffFocused && m.diffSearchLocked() {
+			m.jumpDiffSearch(-1)
+		}
 	case "f":
 		if m.cmd.Kind == KindHistory {
 			m.openChangedFilesForSelectedCommit()
@@ -334,6 +358,63 @@ func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *tuiModel) updateInlineSearchKey(key string) {
+	switch key {
+	case "esc":
+		m.clearInlineSearch()
+	case "enter":
+		if m.sidebarEditing {
+			m.sidebarEditing = false
+			if strings.TrimSpace(m.sidebarSearch) == "" {
+				m.sidebarSearch = ""
+			} else {
+				m.syncSidebarCursorToFilter()
+			}
+			return
+		}
+		if m.diffEditing {
+			m.diffEditing = false
+			if strings.TrimSpace(m.diffSearch) == "" {
+				m.diffSearch = ""
+				m.diffCurrent = -1
+			} else {
+				m.syncDiffSearchCurrent()
+				m.scrollToCurrentDiffMatch()
+			}
+		}
+	case "backspace":
+		if m.sidebarEditing {
+			m.sidebarSearch = dropLastRune(m.sidebarSearch)
+			m.message = ""
+			m.syncSidebarCursorToFilter()
+			return
+		}
+		if m.diffEditing {
+			m.diffSearch = dropLastRune(m.diffSearch)
+			m.diffCurrent = -1
+			m.message = ""
+			m.syncDiffSearchCurrent()
+		}
+	default:
+		if len([]rune(key)) != 1 {
+			return
+		}
+		if m.sidebarEditing {
+			m.sidebarSearch += key
+			m.message = ""
+			m.syncSidebarCursorToFilter()
+			return
+		}
+		if m.diffEditing {
+			m.diffSearch += key
+			m.hScroll = 0
+			m.diffCurrent = -1
+			m.message = ""
+			m.syncDiffSearchCurrent()
+		}
+	}
+}
+
 func (m tuiModel) updateMouse(msg tea.MouseMsg) tuiModel {
 	if m.overlay != overlayNone {
 		return m.updateOverlayMouse(msg)
@@ -352,10 +433,24 @@ func (m tuiModel) updateMouse(msg tea.MouseMsg) tuiModel {
 				row := msg.Y - 2
 				count := m.itemCount()
 				contentHeight := m.sidebarContentHeight(m.height - 2)
-				visible := sidebarVisibleCount(count, contentHeight)
+				indices := m.sidebarDisplayIndices(count)
+				if m.sidebarSearchVisible() {
+					if row == 0 {
+						return m
+					}
+					row--
+				}
+				visible := sidebarVisibleCount(len(indices), contentHeight)
 				if row >= 0 && row < visible {
-					m.selectAt(sidebarSelectableStart(count, contentHeight, m.cursor) + row)
-					m.diffFocused = false
+					cursorPosition := indexOfInt(indices, m.cursor)
+					if cursorPosition < 0 {
+						cursorPosition = 0
+					}
+					start := sidebarSelectableStart(len(indices), contentHeight, cursorPosition)
+					if start+row < len(indices) {
+						m.selectAt(indices[start+row])
+						m.diffFocused = false
+					}
 				}
 			}
 		}
@@ -486,16 +581,34 @@ func (m tuiModel) renderSidebarContent(width, height int) []string {
 
 func (m tuiModel) renderSelectableSidebar(title string, count, width, height int, label func(int) string) []string {
 	lineWidth := sidebarLineWidth(width)
-	lines := []string{styleMuted.Render(title)}
+	var lines []string
+	if m.sidebarSearchVisible() {
+		lines = append(lines, m.renderSidebarSearchLine(lineWidth))
+	} else {
+		lines = append(lines, styleMuted.Render(title))
+	}
 	if count == 0 || height <= 1 {
 		return lines
 	}
-	visible := sidebarVisibleCount(count, height)
-	start := sidebarSelectableStart(count, height, m.cursor)
-	for i := start; i < start+visible && i < count; i++ {
+	indices := m.sidebarDisplayIndices(count)
+	if len(indices) == 0 {
+		return append(lines, styleMuted.Render("  no matches"))
+	}
+	visible := sidebarVisibleCount(len(indices), height)
+	cursorPosition := indexOfInt(indices, m.cursor)
+	if cursorPosition < 0 {
+		cursorPosition = 0
+	}
+	start := sidebarSelectableStart(len(indices), height, cursorPosition)
+	matchOrdinal := 0
+	for pos := start; pos < start+visible && pos < len(indices); pos++ {
+		i := indices[pos]
 		line := truncate(label(i), lineWidth)
 		if i == m.cursor {
-			line = sidebarSelectionStyle(m.diffFocused).Width(lineWidth).Render(line)
+			base := sidebarSelectionStyle(m.diffFocused)
+			line = renderPlainSearchMatches(padDisplay(line, lineWidth), m.sidebarSearch, -1, &matchOrdinal, &base)
+		} else if m.sidebarSearch != "" {
+			line = renderPlainSearchMatches(line, m.sidebarSearch, -1, &matchOrdinal, nil)
 		}
 		lines = append(lines, line)
 	}
@@ -544,10 +657,26 @@ func sidebarSelectableStart(count, height, cursor int) int {
 func (m tuiModel) renderMain(width, height int) string {
 	diffWidth := width - 2
 	lines := RenderDiffViewportWithOptions(m.view.Diff, m.layout, diffWidth, m.hScroll, m.diffRenderOptions())
+	if m.diffSearchVisible() {
+		current := -1
+		if strings.TrimSpace(m.diffSearch) != "" {
+			current = m.diffCurrent
+		}
+		lines = highlightSearchLines(lines, m.diffSearch, current)
+	}
 	if m.scroll > len(lines) {
 		m.scroll = len(lines)
 	}
-	end := m.scroll + height
+	contentHeight := height
+	searchLine := ""
+	if m.diffSearchVisible() {
+		searchLine = m.renderDiffSearchLine(width - 2)
+		contentHeight--
+		if contentHeight < 0 {
+			contentHeight = 0
+		}
+	}
+	end := m.scroll + contentHeight
 	if end > len(lines) {
 		end = len(lines)
 	}
@@ -558,7 +687,11 @@ func (m tuiModel) renderMain(width, height int) string {
 	if len(visible) == 0 && m.view.Message != "" {
 		visible = []string{m.view.Message}
 	}
-	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Render(strings.Join(limitLines(visible, height), "\n"))
+	out := limitLines(visible, contentHeight)
+	if searchLine != "" {
+		out = append([]string{searchLine}, out...)
+	}
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Render(strings.Join(limitLines(out, height), "\n"))
 }
 
 func (m tuiModel) renderBottom() string {
@@ -568,9 +701,19 @@ func (m tuiModel) renderBottom() string {
 		gitHint = "g hide git"
 	}
 	if m.diffFocused {
-		hints = []string{"q quit", "m modes", "esc files", "j/k scroll", "h/l scroll", "z fold", "Z all", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
+		escHint := "esc files"
+		if m.diffSearchVisible() {
+			escHint = "esc clear search"
+		}
+		hints = []string{"q quit", "m modes", "/ search", escHint, "j/k scroll", "h/l scroll", "z fold", "Z all", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
+		if m.diffSearchLocked() {
+			hints = append(hints, "n/N match")
+		}
 	} else {
-		hints = []string{"q quit", "m modes"}
+		hints = []string{"q quit", "m modes", "/ search"}
+		if m.sidebarSearchVisible() {
+			hints = append(hints, "esc clear search")
+		}
 		if m.canClearFileRestriction() {
 			hints = append(hints, "esc clear file")
 		}
@@ -656,6 +799,7 @@ func (m *tuiModel) reloadAndReset() {
 	m.scroll = 0
 	m.hScroll = 0
 	m.diffFocused = false
+	m.clearSearchState()
 	m.resetDiffExpansion()
 	m.cursor = 0
 	if err := m.reload(); err != nil {
@@ -709,6 +853,10 @@ func (m *tuiModel) moveCursor(delta int) {
 	if count == 0 {
 		return
 	}
+	if !m.diffFocused && m.sidebarSearchVisible() {
+		m.moveFilteredSidebarCursor(delta)
+		return
+	}
 	m.selectAt(m.cursor + delta)
 }
 
@@ -735,6 +883,17 @@ func (m *tuiModel) focusDiff() {
 		return
 	}
 	m.diffFocused = true
+}
+
+func (m *tuiModel) openInlineSearch() {
+	m.message = ""
+	if m.diffFocused {
+		m.diffEditing = true
+		m.syncDiffSearchCurrent()
+	} else {
+		m.sidebarEditing = true
+		m.syncSidebarCursorToFilter()
+	}
 }
 
 func (m tuiModel) diffRenderOptions() DiffRenderOptions {
@@ -1089,6 +1248,438 @@ func (m *tuiModel) submitPrompt() {
 	}
 	m.clearCancelCommand()
 	m.reloadAndReset()
+}
+
+func (m tuiModel) sidebarSearchMatches(query string) []int {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return nil
+	}
+	var matches []int
+	for i := 0; i < m.itemCount(); i++ {
+		if strings.Contains(strings.ToLower(xansi.Strip(m.sidebarSearchLabel(i))), query) {
+			matches = append(matches, i)
+		}
+	}
+	return matches
+}
+
+func (m tuiModel) sidebarDisplayIndices(count int) []int {
+	query := strings.TrimSpace(m.sidebarSearch)
+	if query == "" {
+		indices := make([]int, count)
+		for i := 0; i < count; i++ {
+			indices[i] = i
+		}
+		return indices
+	}
+	return m.sidebarSearchMatches(query)
+}
+
+func (m *tuiModel) syncSidebarCursorToFilter() {
+	indices := m.sidebarDisplayIndices(m.itemCount())
+	if len(indices) == 0 {
+		return
+	}
+	if indexOfInt(indices, m.cursor) >= 0 {
+		return
+	}
+	m.selectAt(indices[0])
+}
+
+func (m *tuiModel) moveFilteredSidebarCursor(delta int) {
+	indices := m.sidebarDisplayIndices(m.itemCount())
+	if len(indices) == 0 {
+		return
+	}
+	pos := indexOfInt(indices, m.cursor)
+	if pos < 0 {
+		pos = 0
+	} else {
+		pos += delta
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	if pos >= len(indices) {
+		pos = len(indices) - 1
+	}
+	m.selectAt(indices[pos])
+}
+
+func (m tuiModel) sidebarSearchLabel(index int) string {
+	switch m.cmd.Kind {
+	case KindHistory:
+		if index >= len(m.view.Commits) {
+			return ""
+		}
+		commit := m.view.Commits[index]
+		return strings.Join([]string{commit.Hash, commit.Subject, commit.Raw}, " ")
+	case KindStash:
+		if index >= len(m.view.Stashes) {
+			return ""
+		}
+		stash := m.view.Stashes[index]
+		return strings.Join([]string{stash.Ref, stash.Subject, stash.Raw, renderStashLine(stash, 120)}, " ")
+	default:
+		if index >= len(m.view.Files) {
+			return ""
+		}
+		file := m.view.Files[index]
+		return renderFileLine(file, 120)
+	}
+}
+
+type diffSearchOccurrence struct {
+	Line int
+}
+
+func (m tuiModel) diffSearchOccurrences() []diffSearchOccurrence {
+	query := strings.TrimSpace(m.diffSearch)
+	if query == "" {
+		return nil
+	}
+	lines := m.diffSearchLines()
+	var matches []diffSearchOccurrence
+	for i, line := range lines {
+		if isCollapsedContextSearchLine(line) {
+			continue
+		}
+		count := searchMatchCount(xansi.Strip(line), query)
+		for j := 0; j < count; j++ {
+			matches = append(matches, diffSearchOccurrence{Line: i})
+		}
+	}
+	return matches
+}
+
+func (m *tuiModel) syncDiffSearchCurrent() {
+	matches := m.diffSearchOccurrences()
+	if len(matches) == 0 {
+		m.diffCurrent = -1
+		return
+	}
+	if m.diffCurrent >= 0 && m.diffCurrent < len(matches) {
+		return
+	}
+	for i, match := range matches {
+		if match.Line >= m.scroll {
+			m.diffCurrent = i
+			return
+		}
+	}
+	m.diffCurrent = 0
+}
+
+func (m *tuiModel) jumpDiffSearch(direction int) {
+	matches := m.diffSearchOccurrences()
+	if len(matches) == 0 {
+		m.diffCurrent = -1
+		return
+	}
+	if m.diffCurrent < 0 || m.diffCurrent >= len(matches) {
+		m.syncDiffSearchCurrent()
+	} else {
+		m.diffCurrent += direction
+		if m.diffCurrent < 0 {
+			m.diffCurrent = len(matches) - 1
+		}
+		if m.diffCurrent >= len(matches) {
+			m.diffCurrent = 0
+		}
+	}
+	m.scrollToCurrentDiffMatch()
+}
+
+func (m *tuiModel) scrollToCurrentDiffMatch() {
+	matches := m.diffSearchOccurrences()
+	if len(matches) == 0 || m.diffCurrent < 0 || m.diffCurrent >= len(matches) {
+		return
+	}
+	m.scroll = matches[m.diffCurrent].Line
+	m.hScroll = 0
+}
+
+func (m tuiModel) diffSearchLines() []string {
+	diffWidth := m.mainPaneWidth() - 2
+	return RenderDiffViewportWithOptions(m.view.Diff, m.layout, diffWidth, 0, m.diffRenderOptions())
+}
+
+func (m tuiModel) mainPaneWidth() int {
+	width := m.width
+	if width <= 0 {
+		width = 100
+	}
+	if !m.showSidebar {
+		return width
+	}
+	width -= m.sidebarWidth()
+	if width < 30 {
+		width = 30
+	}
+	return width
+}
+
+func (m tuiModel) sidebarSearchVisible() bool {
+	return m.sidebarEditing || strings.TrimSpace(m.sidebarSearch) != ""
+}
+
+func (m tuiModel) diffSearchVisible() bool {
+	return m.diffEditing || strings.TrimSpace(m.diffSearch) != ""
+}
+
+func (m tuiModel) diffSearchLocked() bool {
+	return !m.diffEditing && strings.TrimSpace(m.diffSearch) != ""
+}
+
+func (m *tuiModel) clearInlineSearch() bool {
+	if m.diffFocused {
+		if m.diffSearchVisible() {
+			m.diffSearch = ""
+			m.diffEditing = false
+			m.diffCurrent = -1
+			return true
+		}
+		return false
+	}
+	if m.sidebarSearchVisible() {
+		m.sidebarSearch = ""
+		m.sidebarEditing = false
+		return true
+	}
+	return false
+}
+
+func (m *tuiModel) clearSearchState() {
+	m.sidebarSearch = ""
+	m.sidebarEditing = false
+	m.diffSearch = ""
+	m.diffEditing = false
+	m.diffCurrent = -1
+}
+
+func (m tuiModel) renderSidebarSearchLine(width int) string {
+	text := "/ " + m.sidebarSearch
+	if m.sidebarEditing {
+		text += "|"
+	}
+	return styleSearchBox.Width(width).Render(padDisplay(cutDisplay(text, 0, width), width))
+}
+
+func (m tuiModel) renderDiffSearchLine(width int) string {
+	left := "/ " + m.diffSearch
+	if m.diffEditing {
+		left += "|"
+	}
+	right := ""
+	matches := m.diffSearchOccurrences()
+	if strings.TrimSpace(m.diffSearch) != "" {
+		if len(matches) == 0 {
+			right = "0/0"
+		} else {
+			current := m.diffCurrent
+			if current < 0 || current >= len(matches) {
+				current = 0
+			}
+			right = fmt.Sprintf("%d/%d", current+1, len(matches))
+		}
+	}
+	text := searchLineText(left, right, width)
+	return styleSearchBox.Width(width).Render(padDisplay(cutDisplay(text, 0, width), width))
+}
+
+func searchLineText(left, right string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if right == "" {
+		return padDisplay(cutDisplay(left, 0, width), width)
+	}
+	rightWidth := lipgloss.Width(right)
+	if rightWidth >= width {
+		return cutDisplay(left, 0, width)
+	}
+	leftWidth := width - rightWidth - 1
+	if leftWidth < 0 {
+		leftWidth = 0
+	}
+	left = cutDisplay(left, 0, leftWidth)
+	gap := width - lipgloss.Width(left) - rightWidth
+	if gap < 1 {
+		return cutDisplay(left+" "+right, 0, width)
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func highlightSearchLines(lines []string, query string, current int) []string {
+	if strings.TrimSpace(query) == "" {
+		return lines
+	}
+	highlighted := make([]string, len(lines))
+	ordinal := 0
+	for i, line := range lines {
+		if isCollapsedContextSearchLine(line) {
+			highlighted[i] = line
+		} else {
+			highlighted[i] = highlightSearchMatches(line, query, current, &ordinal)
+		}
+	}
+	return highlighted
+}
+
+func isCollapsedContextSearchLine(line string) bool {
+	plain := strings.TrimSpace(xansi.Strip(line))
+	return strings.HasPrefix(plain, "... ") && strings.Contains(plain, " unchanged lines")
+}
+
+func highlightSearchMatches(line, query string, current int, ordinal *int) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return line
+	}
+	visible, mapping := visibleByteMap(line)
+	matches := searchMatchRanges(visible, query)
+	if len(matches) == 0 {
+		return line
+	}
+	var out strings.Builder
+	lastOriginal := 0
+	for _, match := range matches {
+		if match.start >= len(mapping) || match.end <= 0 {
+			continue
+		}
+		startOriginal := mapping[match.start]
+		endOriginal := mapping[match.end-1] + 1
+		if startOriginal < lastOriginal {
+			continue
+		}
+		out.WriteString(line[lastOriginal:startOriginal])
+		style := styleSearchMatch
+		if current >= 0 && *ordinal == current {
+			style = styleSearchCurrent
+		}
+		out.WriteString(style.Render(visible[match.start:match.end]))
+		lastOriginal = endOriginal
+		*ordinal = *ordinal + 1
+	}
+	out.WriteString(line[lastOriginal:])
+	return out.String()
+}
+
+func renderPlainSearchMatches(line, query string, current int, ordinal *int, base *lipgloss.Style) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return renderBaseSegment(line, base)
+	}
+	matches := searchMatchRanges(line, query)
+	if len(matches) == 0 {
+		return renderBaseSegment(line, base)
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		if match.start > len(line) || match.end > len(line) || match.start < last {
+			continue
+		}
+		out.WriteString(renderBaseSegment(line[last:match.start], base))
+		style := styleSearchMatch
+		if current >= 0 && *ordinal == current {
+			style = styleSearchCurrent
+		}
+		out.WriteString(style.Render(line[match.start:match.end]))
+		last = match.end
+		*ordinal = *ordinal + 1
+	}
+	out.WriteString(renderBaseSegment(line[last:], base))
+	return out.String()
+}
+
+func renderBaseSegment(segment string, base *lipgloss.Style) string {
+	if segment == "" {
+		return ""
+	}
+	if base == nil {
+		return segment
+	}
+	return base.Render(segment)
+}
+
+type searchRange struct {
+	start int
+	end   int
+}
+
+func searchMatchRanges(text, query string) []searchRange {
+	lowerText := strings.ToLower(text)
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	if lowerQuery == "" {
+		return nil
+	}
+	var matches []searchRange
+	offset := 0
+	for {
+		index := strings.Index(lowerText[offset:], lowerQuery)
+		if index < 0 {
+			return matches
+		}
+		start := offset + index
+		end := start + len(lowerQuery)
+		matches = append(matches, searchRange{start: start, end: end})
+		offset = end
+	}
+}
+
+func searchMatchCount(text, query string) int {
+	return len(searchMatchRanges(text, query))
+}
+
+func visibleByteMap(s string) (string, []int) {
+	var visible strings.Builder
+	var mapping []int
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			i++
+			if i < len(s) && s[i] == '[' {
+				i++
+				for i < len(s) {
+					b := s[i]
+					i++
+					if b >= 0x40 && b <= 0x7e {
+						break
+					}
+				}
+			}
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		chunk := s[i : i+size]
+		visible.WriteString(chunk)
+		for j := 0; j < size; j++ {
+			mapping = append(mapping, i+j)
+		}
+		i += size
+	}
+	return visible.String(), mapping
+}
+
+func dropLastRune(s string) string {
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	return string(runes[:len(runes)-1])
+}
+
+func indexOfInt(values []int, want int) int {
+	for i, value := range values {
+		if value == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *tuiModel) prepareStashAction(key string) {
