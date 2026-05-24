@@ -10,6 +10,9 @@ import (
 )
 
 var (
+	colorAddLineBG = lipgloss.Color("#14532D")
+	colorDelLineBG = lipgloss.Color("#5F1E2E")
+
 	styleTop       = lipgloss.NewStyle().Background(lipgloss.Color("#2B3442")).Foreground(lipgloss.Color("#F8FAFC")).Padding(0, 1)
 	styleBottom    = lipgloss.NewStyle().Background(lipgloss.Color("#202A37")).Foreground(lipgloss.Color("#CBD5E1")).Padding(0, 1)
 	styleSidebar   = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).BorderForeground(lipgloss.Color("#475569")).Padding(0, 1)
@@ -17,8 +20,8 @@ var (
 	styleMuted     = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
 	styleAdd       = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E"))
 	styleDel       = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185"))
-	styleAddLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("#DCFCE7")).Background(lipgloss.Color("#14532D"))
-	styleDelLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFE4E6")).Background(lipgloss.Color("#5F1E2E"))
+	styleAddLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("#DCFCE7")).Background(colorAddLineBG)
+	styleDelLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFE4E6")).Background(colorDelLineBG)
 	styleHunk      = lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))
 	styleHunkLine  = lipgloss.NewStyle().Foreground(lipgloss.Color("#BFDBFE")).Background(lipgloss.Color("#1E293B"))
 	stylePopup     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#A78BFA")).Padding(1, 2)
@@ -26,6 +29,8 @@ var (
 	styleError     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185"))
 	stylePaneTitle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0F2FE")).Background(lipgloss.Color("#1E3A5F")).Bold(true)
 	styleGutter    = lipgloss.NewStyle().Foreground(lipgloss.Color("#93A4B8"))
+	styleAddGutter = lipgloss.NewStyle().Foreground(lipgloss.Color("#A7F3D0")).Background(colorAddLineBG)
+	styleDelGutter = lipgloss.NewStyle().Foreground(lipgloss.Color("#FDA4AF")).Background(colorDelLineBG)
 	styleDivider   = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B"))
 	styleCollapsed = lipgloss.NewStyle().Foreground(lipgloss.Color("#FDE68A")).Background(lipgloss.Color("#334155")).Bold(true)
 	styleAddInline = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0FDF4")).Background(lipgloss.Color("#15803D")).Bold(true)
@@ -160,15 +165,16 @@ func renderSplitCell(kind DiffRowKind, lineNumber int, text string, blank bool, 
 		text = ""
 		spans = nil
 	}
-	gutter := styleGutter.Render(marker + " " + number + " ")
-	code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
-	cell := gutter + code
+	gutterText := marker + " " + number + " "
 	switch kind {
 	case RowAdd:
-		return styleAddLine.Width(paneWidth).Render(cell)
+		return renderChangedCell(RowAdd, gutterText, text, hScroll, codeWidth, spans)
 	case RowDelete:
-		return styleDelLine.Width(paneWidth).Render(cell)
+		return renderChangedCell(RowDelete, gutterText, text, hScroll, codeWidth, spans)
 	default:
+		gutter := styleGutter.Render(gutterText)
+		code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
+		cell := gutter + code
 		if blank {
 			return styleFiller.Width(paneWidth).Render(padDisplay(cell, paneWidth))
 		}
@@ -232,21 +238,29 @@ func renderUnifiedCell(kind DiffRowKind, oldLine, newLine int, text string, gutt
 	case RowDelete:
 		marker = "-"
 	}
-	gutter := styleGutter.Render(formatLineNumber(oldLine, gutterWidth) + " " + formatLineNumber(newLine, gutterWidth) + " " + marker + " ")
-	codeWidth := width - lipgloss.Width(gutter)
+	gutterText := formatLineNumber(oldLine, gutterWidth) + " " + formatLineNumber(newLine, gutterWidth) + " " + marker + " "
+	codeWidth := width - lipgloss.Width(gutterText)
 	if codeWidth < 1 {
 		codeWidth = 1
 	}
-	code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
-	line := gutter + code
 	switch kind {
 	case RowAdd:
-		return styleAddLine.Width(width).Render(line)
+		return renderChangedCell(RowAdd, gutterText, text, hScroll, codeWidth, spans)
 	case RowDelete:
-		return styleDelLine.Width(width).Render(line)
+		return renderChangedCell(RowDelete, gutterText, text, hScroll, codeWidth, spans)
 	default:
+		gutter := styleGutter.Render(gutterText)
+		code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
+		line := gutter + code
 		return padDisplay(line, width)
 	}
+}
+
+func renderChangedCell(kind DiffRowKind, gutterText, text string, hScroll, codeWidth int, spans []InlineSpan) string {
+	lineStyle := lineStyleForKind(kind)
+	gutterStyle := gutterStyleForKind(kind)
+	code := renderStyledCodeText(text, hScroll, codeWidth, spans, lineStyle, inlineStyleForKind(kind))
+	return gutterStyle.Render(gutterText) + code
 }
 
 func renderChangeLane(position BlockPosition) string {
@@ -276,7 +290,29 @@ func inlineStyleForKind(kind DiffRowKind) lipgloss.Style {
 	return styleDelInline
 }
 
+func lineStyleForKind(kind DiffRowKind) lipgloss.Style {
+	if kind == RowAdd {
+		return styleAddLine
+	}
+	return styleDelLine
+}
+
+func gutterStyleForKind(kind DiffRowKind) lipgloss.Style {
+	if kind == RowAdd {
+		return styleAddGutter
+	}
+	return styleDelGutter
+}
+
 func renderCodeText(text string, hScroll, width int, spans []InlineSpan, highlightStyle lipgloss.Style) string {
+	return renderCodeTextWithBase(text, hScroll, width, spans, lipgloss.NewStyle(), highlightStyle)
+}
+
+func renderStyledCodeText(text string, hScroll, width int, spans []InlineSpan, baseStyle, highlightStyle lipgloss.Style) string {
+	return renderCodeTextWithBase(text, hScroll, width, spans, baseStyle, highlightStyle)
+}
+
+func renderCodeTextWithBase(text string, hScroll, width int, spans []InlineSpan, baseStyle, highlightStyle lipgloss.Style) string {
 	if width <= 0 {
 		return ""
 	}
@@ -304,11 +340,14 @@ func renderCodeText(text string, hScroll, width int, spans []InlineSpan, highlig
 			if boundary := nextSpanStart(spans, index, end); boundary < next {
 				next = boundary
 			}
-			builder.WriteString(string(runes[index:next]))
+			builder.WriteString(baseStyle.Render(string(runes[index:next])))
 		}
 		index = next
 	}
-	return padDisplay(builder.String(), width)
+	if actual := lipgloss.Width(builder.String()); actual < width {
+		builder.WriteString(baseStyle.Render(strings.Repeat(" ", width-actual)))
+	}
+	return builder.String()
 }
 
 func spanCovering(spans []InlineSpan, index int) (InlineSpan, bool) {
