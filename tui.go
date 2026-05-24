@@ -276,10 +276,12 @@ func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
 		case "up":
 			if m.pickerCursor > 0 {
 				m.pickerCursor--
+				m.ensurePickerCursorVisible()
 			}
 		case "down":
 			if m.pickerCursor < len(m.pickerItems)-1 {
 				m.pickerCursor++
+				m.ensurePickerCursorVisible()
 			}
 		case "enter":
 			m.choosePicker()
@@ -359,10 +361,12 @@ func (m tuiModel) updateOverlayMouse(msg tea.MouseMsg) tuiModel {
 	case tea.MouseButtonWheelUp:
 		if m.pickerCursor > 0 {
 			m.pickerCursor--
+			m.ensurePickerCursorVisible()
 		}
 	case tea.MouseButtonWheelDown:
 		if m.pickerCursor < len(m.pickerItems)-1 {
 			m.pickerCursor++
+			m.ensurePickerCursorVisible()
 		}
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionPress {
@@ -372,8 +376,9 @@ func (m tuiModel) updateOverlayMouse(msg tea.MouseMsg) tuiModel {
 		case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
 			_, top, _, _ := m.overlayBounds()
 			idx := msg.Y - top - 5
-			if idx >= 0 && idx < len(m.pickerItems) {
-				m.pickerCursor = idx
+			visibleCount := m.pickerVisibleCount()
+			if idx >= 0 && idx < visibleCount && m.pickerScroll+idx < len(m.pickerItems) {
+				m.pickerCursor = m.pickerScroll + idx
 				m.choosePicker()
 			}
 		case overlayConfirm:
@@ -555,7 +560,20 @@ func (m tuiModel) renderOverlay() string {
 		if len(m.pickerItems) == 0 {
 			lines = append(lines, styleMuted.Render("  no matches"))
 		} else {
-			for i, item := range m.pickerItems {
+			visibleCount := m.pickerVisibleCount()
+			scroll := m.pickerScroll
+			if scroll < 0 {
+				scroll = 0
+			}
+			if scroll > max(0, len(m.pickerItems)-visibleCount) {
+				scroll = max(0, len(m.pickerItems)-visibleCount)
+			}
+			end := scroll + visibleCount
+			if end > len(m.pickerItems) {
+				end = len(m.pickerItems)
+			}
+			for i := scroll; i < end; i++ {
+				item := m.pickerItems[i]
 				line := item
 				if i == m.pickerCursor {
 					line = styleSelected.Render("> " + item)
@@ -563,6 +581,9 @@ func (m tuiModel) renderOverlay() string {
 					line = "  " + item
 				}
 				lines = append(lines, line)
+			}
+			if len(m.pickerItems) > visibleCount {
+				lines = append(lines, styleMuted.Render(fmt.Sprintf("showing %d-%d of %d", scroll+1, end, len(m.pickerItems))))
 			}
 		}
 		lines = append(lines, "", "type filter   up/down move   backspace edit   enter select   esc cancel")
@@ -808,6 +829,7 @@ func (m *tuiModel) setPickerItems(items []string) {
 	m.pickerAllItems = append([]string(nil), items...)
 	m.pickerFilter = ""
 	m.pickerCursor = 0
+	m.pickerScroll = 0
 	m.applyPickerFilter()
 }
 
@@ -828,6 +850,49 @@ func (m *tuiModel) applyPickerFilter() {
 	}
 	if m.pickerCursor < 0 {
 		m.pickerCursor = 0
+	}
+	m.ensurePickerCursorVisible()
+}
+
+func (m tuiModel) pickerVisibleCount() int {
+	if len(m.pickerItems) == 0 {
+		return 0
+	}
+	height := m.height
+	if height <= 0 {
+		height = 30
+	}
+	visible := height - 11
+	if visible < 5 {
+		visible = 5
+	}
+	if visible > len(m.pickerItems) {
+		visible = len(m.pickerItems)
+	}
+	return visible
+}
+
+func (m *tuiModel) ensurePickerCursorVisible() {
+	visible := m.pickerVisibleCount()
+	if visible == 0 {
+		m.pickerScroll = 0
+		return
+	}
+	if m.pickerCursor < m.pickerScroll {
+		m.pickerScroll = m.pickerCursor
+	}
+	if m.pickerCursor >= m.pickerScroll+visible {
+		m.pickerScroll = m.pickerCursor - visible + 1
+	}
+	maxScroll := len(m.pickerItems) - visible
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.pickerScroll > maxScroll {
+		m.pickerScroll = maxScroll
+	}
+	if m.pickerScroll < 0 {
+		m.pickerScroll = 0
 	}
 }
 

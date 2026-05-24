@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -344,6 +345,35 @@ func TestPickerOverlayFiltersTypedInput(t *testing.T) {
 	filtered = updated.(tuiModel)
 	if filtered.pickerFilter != "u" {
 		t.Fatalf("backspace filter = %q, want u", filtered.pickerFilter)
+	}
+}
+
+func TestPickerOverlayPinsFilterWhenResultsOverflow(t *testing.T) {
+	model := tuiModel{
+		overlay:     overlayBranch,
+		pickerTitle: "Choose target branch",
+		width:       120,
+		height:      20,
+	}
+	items := make([]string, 40)
+	for i := range items {
+		items[i] = fmt.Sprintf("branch-%02d", i)
+	}
+	model.setPickerItems(items)
+	for i := 0; i < 30; i++ {
+		updated, _ := model.updateOverlayKey("down")
+		model = updated.(tuiModel)
+	}
+
+	overlay := model.renderOverlay()
+	if !strings.Contains(overlay, "Choose target branch") || !strings.Contains(overlay, "filter: ") {
+		t.Fatalf("picker header/filter not pinned:\n%s", overlay)
+	}
+	if lines := strings.Count(overlay, "\n") + 1; lines > model.height {
+		t.Fatalf("picker height = %d, want <= terminal height %d:\n%s", lines, model.height, overlay)
+	}
+	if !strings.Contains(overlay, "branch-30") {
+		t.Fatalf("picker did not scroll to selected result:\n%s", overlay)
 	}
 }
 
