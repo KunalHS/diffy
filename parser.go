@@ -181,17 +181,40 @@ func parseRecent(args []string, opts Options) (Command, error) {
 }
 
 func parseFile(args []string, opts Options) (Command, error) {
-	if len(args) != 2 && len(args) != 3 {
-		return Command{}, errors.New("file requires: diffy file <path> <ref> OR diffy file <path> <from-ref> <to-ref>")
+	cmd := Command{Kind: KindFile, Options: opts, Path: opts.FilePath, Interactive: opts.FilePath == ""}
+	if opts.FilePath != "" {
+		switch len(args) {
+		case 0:
+			return cmd, nil
+		case 1:
+			cmd.Ref = args[0]
+			return cmd, nil
+		case 2:
+			cmd.FromRef = args[0]
+			cmd.ToRef = args[1]
+			return cmd, nil
+		default:
+			return Command{}, errors.New("file accepts at most two refs when --file/--path provides the file")
+		}
 	}
-	cmd := Command{Kind: KindFile, Options: opts, Path: args[0]}
-	if len(args) == 2 {
+	switch len(args) {
+	case 0:
+		return cmd, nil
+	case 1:
+		cmd.Ref = args[0]
+		return cmd, nil
+	case 2:
+		cmd.Path = args[0]
 		cmd.Ref = args[1]
 		return cmd, nil
+	case 3:
+		cmd.Path = args[0]
+		cmd.FromRef = args[1]
+		cmd.ToRef = args[2]
+		return cmd, nil
+	default:
+		return Command{}, errors.New("file requires: diffy file [path] <ref> OR diffy file [path] <from-ref> <to-ref>")
 	}
-	cmd.FromRef = args[1]
-	cmd.ToRef = args[2]
-	return cmd, nil
 }
 
 func parseStash(args []string, opts Options) (Command, error) {

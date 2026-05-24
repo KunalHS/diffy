@@ -319,6 +319,19 @@ func TestLayoutToggleWritesState(t *testing.T) {
 	}
 }
 
+func TestModeOverlayQQuits(t *testing.T) {
+	model := tuiModel{overlay: overlayModes}
+
+	_, cmd := model.updateOverlayKey("q")
+	if cmd == nil {
+		t.Fatal("q in mode selector did not return a quit command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("q in mode selector returned %T, want tea.QuitMsg", msg)
+	}
+}
+
 func TestPickerOverlayFiltersTypedInput(t *testing.T) {
 	model := tuiModel{
 		overlay:     overlayBranch,

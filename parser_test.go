@@ -69,3 +69,37 @@ func TestParseSharedOptions(t *testing.T) {
 		t.Fatalf("layout = %s, want unified", cmd.Options.Layout)
 	}
 }
+
+func TestParseFileComparePickerForms(t *testing.T) {
+	cfg := Config{Layout: LayoutSplit}
+	tests := []struct {
+		name    string
+		args    []string
+		path    string
+		ref     string
+		fromRef string
+		toRef   string
+	}{
+		{name: "picker no refs", args: []string{"file"}},
+		{name: "picker one ref", args: []string{"file", "main"}, ref: "main"},
+		{name: "path option one ref", args: []string{"file", "--file", "src/App.ts", "main"}, path: "src/App.ts", ref: "main"},
+		{name: "path option two refs", args: []string{"file", "--path", "src/App.ts", "main", "HEAD"}, path: "src/App.ts", fromRef: "main", toRef: "HEAD"},
+		{name: "legacy path first", args: []string{"file", "src/App.ts", "main"}, path: "src/App.ts", ref: "main"},
+		{name: "legacy path first two refs", args: []string{"file", "src/App.ts", "main", "HEAD"}, path: "src/App.ts", fromRef: "main", toRef: "HEAD"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, err := ParseCommand(tt.args, cfg)
+			if err != nil {
+				t.Fatalf("ParseCommand returned error: %v", err)
+			}
+			if cmd.Kind != KindFile {
+				t.Fatalf("kind = %s, want file", cmd.Kind)
+			}
+			if cmd.Path != tt.path || cmd.Ref != tt.ref || cmd.FromRef != tt.fromRef || cmd.ToRef != tt.toRef {
+				t.Fatalf("cmd = %#v", cmd)
+			}
+		})
+	}
+}

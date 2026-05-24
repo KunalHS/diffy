@@ -256,6 +256,48 @@ func TestTUIStashSelectionDoesNotResetCursor(t *testing.T) {
 	}
 }
 
+func TestTUIFileCompareUsesFileSelectorBeforeRefs(t *testing.T) {
+	repo := newFixtureRepo(t)
+	g := Git{Dir: repo}
+	m := tuiModel{
+		git:         g,
+		controller:  Controller{Git: g},
+		cmd:         Command{Kind: KindFile, Options: Options{Layout: LayoutSplit}},
+		layout:      LayoutSplit,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+
+	m.loadInitial()
+	if m.overlay != overlayFile {
+		t.Fatalf("overlay = %v, want file picker", m.overlay)
+	}
+	if !containsString(m.pickerItems, "app.txt") {
+		t.Fatalf("file picker items = %#v, want app.txt", m.pickerItems)
+	}
+
+	m.choosePicker()
+	if m.overlay != overlayPrompt || m.promptKind != promptFileCompareRefs {
+		t.Fatalf("overlay/prompt = %v/%s, want refs prompt", m.overlay, m.promptKind)
+	}
+	if m.cmd.Path != "app.txt" {
+		t.Fatalf("selected path = %q, want app.txt", m.cmd.Path)
+	}
+
+	m.input = "main"
+	m.submitPrompt()
+	if m.overlay != overlayNone {
+		t.Fatalf("overlay = %v, want none", m.overlay)
+	}
+	if m.cmd.Ref != "main" || m.view.Mode != KindFile {
+		t.Fatalf("file compare command/view = %#v %#v", m.cmd, m.view)
+	}
+	if !strings.Contains(m.view.Diff, "feature line") {
+		t.Fatalf("file compare diff missing expected content:\n%s", m.view.Diff)
+	}
+}
+
 func newFixtureRepo(t *testing.T) string {
 	t.Helper()
 	if err := os.MkdirAll(".testtmp", 0o755); err != nil {
@@ -365,6 +407,15 @@ func appendFile(t *testing.T, dir, path, contents string) {
 func hasPath(files []FileStat, path string) bool {
 	for _, file := range files {
 		if file.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

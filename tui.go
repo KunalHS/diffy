@@ -24,11 +24,11 @@ const (
 type promptKind string
 
 const (
-	promptCompareTarget promptKind = "compare-target"
-	promptRecentCount   promptKind = "recent-count"
-	promptFileCompare   promptKind = "file-compare"
-	promptHistoryFile   promptKind = "history-file"
-	promptCommit        promptKind = "commit"
+	promptCompareTarget   promptKind = "compare-target"
+	promptRecentCount     promptKind = "recent-count"
+	promptFileCompareRefs promptKind = "file-compare-refs"
+	promptHistoryFile     promptKind = "history-file"
+	promptCommit          promptKind = "commit"
 )
 
 const (
@@ -114,13 +114,18 @@ func (m *tuiModel) loadInitial() {
 		return
 	}
 	if m.cmd.Kind == KindHistory && m.cmd.Path == "" {
-		files, err := m.git.TrackedFiles()
-		if err != nil {
-			m.err = err.Error()
+		m.openTrackedFilePicker("Choose file for history")
+		return
+	}
+	if m.cmd.Kind == KindFile {
+		if m.cmd.Path == "" {
+			m.openTrackedFilePicker("Choose file to compare")
 			return
 		}
-		m.openFilePicker("Choose file for history", files)
-		return
+		if !m.hasFileCompareRefs() {
+			m.openPrompt(promptFileCompareRefs, "File compare refs: <ref> [to-ref]")
+			return
+		}
 	}
 	if err := m.reload(); err != nil {
 		m.err = err.Error()
@@ -266,6 +271,9 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
+	if m.overlay == overlayModes && key == "q" {
+		return m, tea.Quit
+	}
 	switch m.overlay {
 	case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
 		switch key {
@@ -294,7 +302,7 @@ func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
 	case overlayPrompt:
 		switch key {
 		case "esc":
-			m.closeOverlay()
+			m.cancelOverlay()
 		case "enter":
 			m.submitPrompt()
 		case "backspace":
@@ -854,6 +862,15 @@ func (m *tuiModel) openBranchPicker(title string) {
 	m.setPickerItems(items)
 }
 
+func (m *tuiModel) openTrackedFilePicker(title string) {
+	files, err := m.git.TrackedFiles()
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.openFilePicker(title, files)
+}
+
 func (m *tuiModel) openFilePicker(title string, items []string) {
 	m.overlay = overlayFile
 	m.pickerTitle = title
@@ -960,15 +977,27 @@ func (m *tuiModel) choosePicker() {
 		}
 		m.reloadAndReset()
 	case overlayFile:
-		m.clearCancelCommand()
 		if m.cmd.Kind == KindHistory {
+			m.clearCancelCommand()
 			m.cmd.Path = value
+			m.closeOverlay()
+			m.reloadAndReset()
+		} else if m.cmd.Kind == KindFile {
+			m.cmd.Path = value
+			m.closeOverlay()
+			if m.hasFileCompareRefs() {
+				m.clearCancelCommand()
+				m.reloadAndReset()
+			} else {
+				m.openPrompt(promptFileCompareRefs, "File compare refs: <ref> [to-ref]")
+			}
 		} else {
+			m.clearCancelCommand()
 			m.cmd.Options.FileFlag = true
 			m.cmd.Options.FilePath = value
+			m.closeOverlay()
+			m.reloadAndReset()
 		}
-		m.closeOverlay()
-		m.reloadAndReset()
 	case overlayChangedFiles:
 		m.clearCancelCommand()
 		anchor := ""
@@ -1006,19 +1035,22 @@ func (m *tuiModel) chooseMode(value string) {
 	case "Recent commits":
 		m.openPrompt(promptRecentCount, "Recent commit count")
 	case "File compare":
-		m.openPrompt(promptFileCompare, "File compare: <path> <ref> [to-ref]")
+		m.rememberCancelCommand()
+		m.cmd = Command{Kind: KindFile, Options: Options{Layout: m.layout}}
+		m.openTrackedFilePicker("Choose file to compare")
+		if m.overlay != overlayFile {
+			m.cancelOverlay()
+		}
 	case "Stash":
 		m.cmd = Command{Kind: KindStash, Options: Options{Layout: m.layout}}
 		m.reloadAndReset()
 	case "File history":
-		files, err := m.git.TrackedFiles()
-		if err != nil {
-			m.err = err.Error()
-			return
-		}
 		m.rememberCancelCommand()
 		m.cmd = Command{Kind: KindHistory, Options: Options{Layout: m.layout}}
-		m.openFilePicker("Choose file for history", files)
+		m.openTrackedFilePicker("Choose file for history")
+		if m.overlay != overlayFile {
+			m.cancelOverlay()
+		}
 	case "Commit view":
 		m.openPrompt(promptCommit, "Commit ref")
 	}
@@ -1042,24 +1074,31 @@ func (m *tuiModel) submitPrompt() {
 			return
 		}
 		m.cmd = Command{Kind: KindRecent, Count: n, Options: Options{Layout: m.layout}}
-	case promptFileCompare:
+	case promptFileCompareRefs:
 		parts := strings.Fields(input)
-		if len(parts) != 2 && len(parts) != 3 {
-			m.err = "file compare needs: <path> <ref> [to-ref]"
+		if len(parts) != 1 && len(parts) != 2 {
+			m.err = "file compare needs: <ref> [to-ref]"
 			return
 		}
-		m.cmd = Command{Kind: KindFile, Path: parts[0], Options: Options{Layout: m.layout}}
-		if len(parts) == 2 {
-			m.cmd.Ref = parts[1]
+		if m.cmd.Path == "" {
+			m.err = "file compare needs a selected file"
+			return
+		}
+		if len(parts) == 1 {
+			m.cmd.Ref = parts[0]
+			m.cmd.FromRef = ""
+			m.cmd.ToRef = ""
 		} else {
-			m.cmd.FromRef = parts[1]
-			m.cmd.ToRef = parts[2]
+			m.cmd.Ref = ""
+			m.cmd.FromRef = parts[0]
+			m.cmd.ToRef = parts[1]
 		}
 	case promptHistoryFile:
 		m.cmd = Command{Kind: KindHistory, Path: input, Options: Options{Layout: m.layout}}
 	case promptCommit:
 		m.cmd = Command{Kind: KindCommit, Commit: input, Options: Options{Layout: m.layout}}
 	}
+	m.clearCancelCommand()
 	m.reloadAndReset()
 }
 
@@ -1099,6 +1138,10 @@ func (m *tuiModel) openChangedFilesForSelectedCommit() {
 	m.overlay = overlayChangedFiles
 	m.pickerTitle = "Files changed in " + commit
 	m.setPickerItems(files)
+}
+
+func (m tuiModel) hasFileCompareRefs() bool {
+	return m.cmd.Ref != "" || (m.cmd.FromRef != "" && m.cmd.ToRef != "")
 }
 
 func (m *tuiModel) anchorCommit(hash string) {
