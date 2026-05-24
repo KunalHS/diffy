@@ -41,7 +41,7 @@ The mouse support should be additive. The tool should still feel fast and comple
 
 ## Global Command Palette
 
-Every TUI screen should support `/` as a global command palette shortcut.
+Every TUI screen should support `m` as a global command palette shortcut.
 
 The command palette should open as a popup over the current screen and let the user jump to another mode without restarting Diffy.
 
@@ -49,7 +49,7 @@ Example flows:
 
 ```text
 start in local changes
-press /
+press m
 choose compare branch
 pick target branch
 continue in compare view
@@ -57,7 +57,7 @@ continue in compare view
 
 ```text
 start in compare view
-press /
+press m
 choose file history
 pick file
 continue in file history view
@@ -77,7 +77,7 @@ The palette should include all approved workflows:
 
 As more workflows are approved, they should be added to the palette.
 
-If the active screen already uses filtering, filtering should either move to a context-specific key or happen inside focused lists. `/` is reserved for the global mode switcher.
+If the active screen already uses filtering, filtering should either move to a context-specific key or happen inside focused lists. `m` is reserved for the global mode switcher.
 
 ## TUI Layout
 
@@ -97,7 +97,7 @@ The bottom shortcut bar is part of the product. It should show the actions that 
 Example shortcut hints:
 
 ```text
-q quit    / modes     enter open    esc back    j/k move    space select
+q quit    m modes     enter open    esc back    j/k move    space select
 s sidebar f files     h hunks       w wrap
 1 unified  2 split     n next         p previous  ? help
 ```

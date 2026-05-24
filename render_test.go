@@ -282,6 +282,27 @@ func TestBottomHintShowsSidebarShortcutAsS(t *testing.T) {
 	}
 }
 
+func TestModeShortcutIsM(t *testing.T) {
+	model := tuiModel{cmd: Command{Kind: KindLocal}}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	withModes := updated.(tuiModel)
+	if withModes.overlay != overlayModes {
+		t.Fatalf("m key overlay = %v, want mode selector", withModes.overlay)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	withoutModes := updated.(tuiModel)
+	if withoutModes.overlay == overlayModes {
+		t.Fatalf("/ key should not open mode selector")
+	}
+
+	bottom := model.renderBottom()
+	if !strings.Contains(bottom, "m modes") || strings.Contains(bottom, "/ modes") {
+		t.Fatalf("bottom hint = %q, want m modes only", bottom)
+	}
+}
+
 func TestGitCommandHiddenFromMainByDefault(t *testing.T) {
 	model := tuiModel{
 		width:       80,

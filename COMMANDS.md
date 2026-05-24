@@ -388,11 +388,11 @@ Expected behavior:
 
 Status: Approved
 
-All TUI screens should support `/` as a global mode switcher.
+All TUI screens should support `m` as a global mode switcher.
 
 Expected behavior:
 
-- Pressing `/` opens a popup command palette over the current screen.
+- Pressing `m` opens a popup command palette over the current screen.
 - The palette lets the user jump to another approved workflow without exiting Diffy.
 - The palette is keyboard-first and mouse-clickable.
 - The current session state should update after selecting a new workflow.
@@ -416,13 +416,13 @@ Example:
 ```text
 run diffy
 inspect local changes
-press /
+press m
 choose Compare/review branches
 pick target branch
 continue in compare view
 ```
 
-Because `/` is global, per-list filtering should use another key or only happen inside focused input controls.
+Because `m` is global, per-list filtering should use another key or only happen inside focused input controls.
 
 ## Recent Commits
 
@@ -569,7 +569,7 @@ bottom bar: shortcuts
 Expected shortcuts:
 
 ```text
-a apply    p pop    d drop/delete    r refresh    tab switch pane    q quit    / modes
+a apply    p pop    d drop/delete    r refresh    tab switch pane    q quit    m modes
 ```
 
 Mutating actions must show a confirmation popup with the exact Git command before running.
@@ -664,7 +664,7 @@ git diff <commit>^ <commit> -- <path>
 Expected shortcuts:
 
 ```text
-enter open commit/file diff    f changed files    c commit view    q quit    / modes
+enter open commit/file diff    f changed files    c commit view    q quit    m modes
 ```
 
 Changed-files shortcut:

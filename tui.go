@@ -243,7 +243,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "g":
 		m.showGitCmd = !m.showGitCmd
-	case "/":
+	case "m":
 		m.overlay = overlayModes
 		m.pickerTitle = "Modes"
 		m.setPickerItems([]string{"Local changes", "Compare/review branches", "Ahead of upstream", "Behind upstream", "Recent commits", "File compare", "Stash", "File history", "Commit view"})
@@ -568,9 +568,9 @@ func (m tuiModel) renderBottom() string {
 		gitHint = "g hide git"
 	}
 	if m.diffFocused {
-		hints = []string{"q quit", "/ modes", "esc files", "j/k scroll", "h/l scroll", "z fold", "Z all", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
+		hints = []string{"q quit", "m modes", "esc files", "j/k scroll", "h/l scroll", "z fold", "Z all", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
 	} else {
-		hints = []string{"q quit", "/ modes"}
+		hints = []string{"q quit", "m modes"}
 		if m.canClearFileRestriction() {
 			hints = append(hints, "esc clear file")
 		}
