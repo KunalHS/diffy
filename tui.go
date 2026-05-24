@@ -495,7 +495,7 @@ func (m tuiModel) renderSelectableSidebar(title string, count, width, height int
 	for i := start; i < start+visible && i < count; i++ {
 		line := truncate(label(i), lineWidth)
 		if i == m.cursor {
-			line = styleSelected.Width(lineWidth).Render(line)
+			line = sidebarSelectionStyle(m.diffFocused).Width(lineWidth).Render(line)
 		}
 		lines = append(lines, line)
 	}

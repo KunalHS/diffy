@@ -444,6 +444,34 @@ func TestCompareSidebarUsesSameFileListAsLocal(t *testing.T) {
 	}
 }
 
+func TestSidebarSelectionDimsWhenDiffFocused(t *testing.T) {
+	model := tuiModel{
+		cmd: Command{Kind: KindLocal},
+		view: ViewData{
+			Files: []FileStat{
+				{Path: "src/App.java", Add: 3, Del: 1},
+				{Path: "src/Thing.java", Add: 2},
+			},
+		},
+		cursor: 1,
+	}
+
+	activeStyle := sidebarSelectionStyle(false)
+	dimmedStyle := sidebarSelectionStyle(true)
+	if fmt.Sprint(activeStyle.GetBackground()) == fmt.Sprint(dimmedStyle.GetBackground()) {
+		t.Fatalf("focused and unfocused sidebar selections use the same background")
+	}
+	if fmt.Sprint(activeStyle.GetForeground()) == fmt.Sprint(dimmedStyle.GetForeground()) {
+		t.Fatalf("focused and unfocused sidebar selections use the same foreground")
+	}
+
+	model.diffFocused = true
+	dimmed := model.renderSidebar(40, 8)
+	if !strings.Contains(dimmed, "Thing.java +2 -0") {
+		t.Fatalf("dimmed sidebar lost selected file text:\n%s", dimmed)
+	}
+}
+
 func TestStashSidebarShowsBoundedStashListOnly(t *testing.T) {
 	stashes := make([]StashItem, 40)
 	for i := range stashes {
