@@ -278,6 +278,21 @@ func TestGitCommandShownAtBottomOfSidebarWhenToggled(t *testing.T) {
 	}
 }
 
+func TestSidebarFileLineShowsFileNameOnly(t *testing.T) {
+	line := renderFileLine(FileStat{
+		Path: "core/src/main/java/com/ontic/core/topic/common/TopicType.java",
+		Add:  12,
+		Del:  3,
+	}, 80)
+
+	if strings.Contains(line, "core/src/main/java") {
+		t.Fatalf("sidebar file line should not include full path: %q", line)
+	}
+	if !strings.Contains(line, "TopicType.java +12 -3") {
+		t.Fatalf("sidebar file line = %q, want file name with counts", line)
+	}
+}
+
 func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 	model := tuiModel{
 		width:  120,

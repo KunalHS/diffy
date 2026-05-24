@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 
@@ -419,11 +420,19 @@ func formatLineNumber(line, width int) string {
 }
 
 func renderFileLine(file FileStat, width int) string {
-	name := truncate(file.Path, width-12)
+	name := truncate(sidebarFileName(file.Path), width-12)
 	if file.Binary {
 		return fmt.Sprintf("%s binary", name)
 	}
 	return fmt.Sprintf("%s +%d -%d", name, file.Add, file.Del)
+}
+
+func sidebarFileName(filePath string) string {
+	name := path.Base(filePath)
+	if name == "." || name == "/" {
+		return filePath
+	}
+	return name
 }
 
 func truncate(s string, width int) string {
