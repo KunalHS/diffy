@@ -28,6 +28,11 @@ var (
 	styleGutter    = lipgloss.NewStyle().Foreground(lipgloss.Color("#93A4B8"))
 	styleDivider   = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B"))
 	styleCollapsed = lipgloss.NewStyle().Foreground(lipgloss.Color("#FDE68A")).Background(lipgloss.Color("#334155")).Bold(true)
+	styleAddInline = lipgloss.NewStyle().Foreground(lipgloss.Color("#F0FDF4")).Background(lipgloss.Color("#15803D")).Bold(true)
+	styleDelInline = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFF1F2")).Background(lipgloss.Color("#BE123C")).Bold(true)
+	styleLane      = lipgloss.NewStyle().Foreground(lipgloss.Color("#CBD5E1")).Background(lipgloss.Color("#273449")).Bold(true)
+	styleLaneIdle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B"))
+	styleFiller    = lipgloss.NewStyle().Background(lipgloss.Color("#1F2937"))
 )
 
 func RenderDiff(diff string, layout Layout, width int) []string {
@@ -74,7 +79,7 @@ func renderSplitDocument(doc DiffDocument, width, hScroll int, opts DiffRenderOp
 			lines = append(lines, "")
 		}
 		lines = append(lines, renderSplitFileHeader(file, paneWidth, rightPaneWidth))
-		rows := VisibleRowsForFile(file, fileIndex, opts)
+		rows := PrepareRenderRows(VisibleRowsForFile(file, fileIndex, opts))
 		if len(rows) == 0 {
 			lines = append(lines, styleMuted.Width(width).Render("No textual hunks in this file."))
 			continue
@@ -96,7 +101,8 @@ func renderSplitFileHeader(file DiffFile, leftWidth, rightWidth int) string {
 	return left + styleDivider.Render(" │ ") + right
 }
 
-func renderSplitRow(row DiffRow, gutterWidth, leftWidth, rightWidth, totalWidth, hScroll int) string {
+func renderSplitRow(renderRow RenderRow, gutterWidth, leftWidth, rightWidth, totalWidth, hScroll int) string {
+	row := renderRow.Row
 	if row.Kind == RowCollapsed && row.Collapsed != nil {
 		return styleCollapsed.Width(totalWidth).Render(padDisplay(collapsedLabel(row.Collapsed), totalWidth))
 	}
@@ -130,12 +136,12 @@ func renderSplitRow(row DiffRow, gutterWidth, leftWidth, rightWidth, totalWidth,
 		rightBlank = true
 	}
 
-	left := renderSplitCell(leftKind, leftLine, leftText, leftBlank, gutterWidth, leftWidth, hScroll)
-	right := renderSplitCell(rightKind, rightLine, rightText, rightBlank, gutterWidth, rightWidth, hScroll)
-	return left + styleDivider.Render(" │ ") + right
+	left := renderSplitCell(leftKind, leftLine, leftText, leftBlank, gutterWidth, leftWidth, hScroll, renderRow.OldInline)
+	right := renderSplitCell(rightKind, rightLine, rightText, rightBlank, gutterWidth, rightWidth, hScroll, renderRow.NewInline)
+	return left + renderChangeLane(renderRow.BlockPosition) + right
 }
 
-func renderSplitCell(kind DiffRowKind, lineNumber int, text string, blank bool, gutterWidth, paneWidth, hScroll int) string {
+func renderSplitCell(kind DiffRowKind, lineNumber int, text string, blank bool, gutterWidth, paneWidth, hScroll int, spans []InlineSpan) string {
 	codeWidth := paneWidth - gutterWidth - 3
 	if codeWidth < 1 {
 		codeWidth = 1
@@ -152,9 +158,10 @@ func renderSplitCell(kind DiffRowKind, lineNumber int, text string, blank bool, 
 		marker = " "
 		number = strings.Repeat(" ", gutterWidth)
 		text = ""
+		spans = nil
 	}
 	gutter := styleGutter.Render(marker + " " + number + " ")
-	code := padDisplay(cutDisplay(text, hScroll, codeWidth), codeWidth)
+	code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
 	cell := gutter + code
 	switch kind {
 	case RowAdd:
@@ -162,6 +169,9 @@ func renderSplitCell(kind DiffRowKind, lineNumber int, text string, blank bool, 
 	case RowDelete:
 		return styleDelLine.Width(paneWidth).Render(cell)
 	default:
+		if blank {
+			return styleFiller.Width(paneWidth).Render(padDisplay(cell, paneWidth))
+		}
 		return padDisplay(cell, paneWidth)
 	}
 }
@@ -175,7 +185,7 @@ func renderUnifiedDocument(doc DiffDocument, width, hScroll int, opts DiffRender
 		}
 		_, newName := displayFileNames(file)
 		lines = append(lines, stylePaneTitle.Width(width).Render(padDisplay(cutDisplay(newName, 0, width), width)))
-		rows := VisibleRowsForFile(file, fileIndex, opts)
+		rows := PrepareRenderRows(VisibleRowsForFile(file, fileIndex, opts))
 		if len(rows) == 0 {
 			lines = append(lines, styleMuted.Width(width).Render("No textual hunks in this file."))
 			continue
@@ -190,7 +200,8 @@ func renderUnifiedDocument(doc DiffDocument, width, hScroll int, opts DiffRender
 	return lines
 }
 
-func renderUnifiedRow(row DiffRow, gutterWidth, width, hScroll int) []string {
+func renderUnifiedRow(renderRow RenderRow, gutterWidth, width, hScroll int) []string {
+	row := renderRow.Row
 	if row.Kind == RowCollapsed && row.Collapsed != nil {
 		return []string{styleCollapsed.Width(width).Render(padDisplay(collapsedLabel(row.Collapsed), width))}
 	}
@@ -199,21 +210,21 @@ func renderUnifiedRow(row DiffRow, gutterWidth, width, hScroll int) []string {
 	}
 	if row.Kind == RowModify {
 		return []string{
-			renderUnifiedCell(RowDelete, row.OldLine, 0, row.OldText, gutterWidth, width, hScroll),
-			renderUnifiedCell(RowAdd, 0, row.NewLine, row.NewText, gutterWidth, width, hScroll),
+			renderUnifiedCell(RowDelete, row.OldLine, 0, row.OldText, gutterWidth, width, hScroll, renderRow.OldInline),
+			renderUnifiedCell(RowAdd, 0, row.NewLine, row.NewText, gutterWidth, width, hScroll, renderRow.NewInline),
 		}
 	}
 	switch row.Kind {
 	case RowAdd:
-		return []string{renderUnifiedCell(RowAdd, 0, row.NewLine, row.NewText, gutterWidth, width, hScroll)}
+		return []string{renderUnifiedCell(RowAdd, 0, row.NewLine, row.NewText, gutterWidth, width, hScroll, nil)}
 	case RowDelete:
-		return []string{renderUnifiedCell(RowDelete, row.OldLine, 0, row.OldText, gutterWidth, width, hScroll)}
+		return []string{renderUnifiedCell(RowDelete, row.OldLine, 0, row.OldText, gutterWidth, width, hScroll, nil)}
 	default:
-		return []string{renderUnifiedCell(RowContext, row.OldLine, row.NewLine, row.NewText, gutterWidth, width, hScroll)}
+		return []string{renderUnifiedCell(RowContext, row.OldLine, row.NewLine, row.NewText, gutterWidth, width, hScroll, nil)}
 	}
 }
 
-func renderUnifiedCell(kind DiffRowKind, oldLine, newLine int, text string, gutterWidth, width, hScroll int) string {
+func renderUnifiedCell(kind DiffRowKind, oldLine, newLine int, text string, gutterWidth, width, hScroll int, spans []InlineSpan) string {
 	marker := " "
 	switch kind {
 	case RowAdd:
@@ -226,7 +237,7 @@ func renderUnifiedCell(kind DiffRowKind, oldLine, newLine int, text string, gutt
 	if codeWidth < 1 {
 		codeWidth = 1
 	}
-	code := padDisplay(cutDisplay(text, hScroll, codeWidth), codeWidth)
+	code := renderCodeText(text, hScroll, codeWidth, spans, inlineStyleForKind(kind))
 	line := gutter + code
 	switch kind {
 	case RowAdd:
@@ -236,6 +247,87 @@ func renderUnifiedCell(kind DiffRowKind, oldLine, newLine int, text string, gutt
 	default:
 		return padDisplay(line, width)
 	}
+}
+
+func renderChangeLane(position BlockPosition) string {
+	marker := "│"
+	style := styleLaneIdle
+	switch position {
+	case BlockStart:
+		marker = "╭"
+		style = styleLane
+	case BlockMiddle:
+		marker = "┃"
+		style = styleLane
+	case BlockEnd:
+		marker = "╰"
+		style = styleLane
+	case BlockSingle:
+		marker = "◆"
+		style = styleLane
+	}
+	return style.Width(3).Render(" " + marker + " ")
+}
+
+func inlineStyleForKind(kind DiffRowKind) lipgloss.Style {
+	if kind == RowAdd {
+		return styleAddInline
+	}
+	return styleDelInline
+}
+
+func renderCodeText(text string, hScroll, width int, spans []InlineSpan, highlightStyle lipgloss.Style) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if hScroll < 0 {
+		hScroll = 0
+	}
+	if hScroll > len(runes) {
+		hScroll = len(runes)
+	}
+	end := hScroll + width
+	if end > len(runes) {
+		end = len(runes)
+	}
+	var builder strings.Builder
+	for index := hScroll; index < end; {
+		span, ok := spanCovering(spans, index)
+		next := end
+		if ok {
+			if span.End < next {
+				next = span.End
+			}
+			builder.WriteString(highlightStyle.Render(string(runes[index:next])))
+		} else {
+			if boundary := nextSpanStart(spans, index, end); boundary < next {
+				next = boundary
+			}
+			builder.WriteString(string(runes[index:next]))
+		}
+		index = next
+	}
+	return padDisplay(builder.String(), width)
+}
+
+func spanCovering(spans []InlineSpan, index int) (InlineSpan, bool) {
+	for _, span := range spans {
+		if index >= span.Start && index < span.End {
+			return span, true
+		}
+	}
+	return InlineSpan{}, false
+}
+
+func nextSpanStart(spans []InlineSpan, index, end int) int {
+	next := end
+	for _, span := range spans {
+		if span.Start > index && span.Start < next {
+			next = span.Start
+		}
+	}
+	return next
 }
 
 func displayFileNames(file DiffFile) (string, string) {

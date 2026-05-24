@@ -89,6 +89,44 @@ func TestSplitRenderUsesPaneDividerNotTextPipe(t *testing.T) {
 	}
 }
 
+func TestSplitRenderShowsChangeLaneMarkers(t *testing.T) {
+	diff := `diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,3 +1,3 @@
+-old one
+-old two
+-old three
++new one
++new two
++new three`
+
+	lines := RenderDiff(diff, LayoutSplit, 120)
+	joined := strings.Join(lines, "\n")
+	for _, marker := range []string{"╭", "┃", "╰"} {
+		if !strings.Contains(joined, marker) {
+			t.Fatalf("split render missing change lane marker %q:\n%s", marker, joined)
+		}
+	}
+}
+
+func TestModifiedRowsRenderPairedOldAndNewTokens(t *testing.T) {
+	diff := `diff --git a/App.java b/App.java
+--- a/App.java
++++ b/App.java
+@@ -32,1 +32,1 @@
+-import com.ontic.fwk.common.IdLabel;
++import com.ontic.core.signals.topic.TopicUtils;`
+
+	for _, layout := range []Layout{LayoutSplit, LayoutUnified} {
+		lines := RenderDiff(diff, layout, 140)
+		joined := strings.Join(lines, "\n")
+		if !strings.Contains(joined, "IdLabel") || !strings.Contains(joined, "TopicUtils") {
+			t.Fatalf("%s render missing modified tokens:\n%s", layout, joined)
+		}
+	}
+}
+
 func TestUnifiedRenderUsesLineNumberGutters(t *testing.T) {
 	diff := `diff --git a/app.txt b/app.txt
 --- a/app.txt
