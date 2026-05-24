@@ -73,6 +73,8 @@ type tuiModel struct {
 	diffFocused    bool
 	expandedDiff   map[string]bool
 	expandAllDiff  bool
+	cancelCmd      Command
+	hasCancelCmd   bool
 }
 
 func RunTUI(cmd Command, cfg Config, state DiffyState) error {
@@ -122,7 +124,9 @@ func (m *tuiModel) loadInitial() {
 	}
 	if err := m.reload(); err != nil {
 		m.err = err.Error()
+		return
 	}
+	m.syncSelectionAfterReload()
 }
 
 func (m tuiModel) Init() tea.Cmd {
@@ -230,6 +234,9 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.showSidebar = !m.showSidebar
 		m.rememberSidebar()
+		if m.showSidebar && !m.diffFocused {
+			m.syncSelectionAfterReload()
+		}
 	case "g":
 		m.showGitCmd = !m.showGitCmd
 	case "/":
@@ -263,7 +270,7 @@ func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
 	case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
 		switch key {
 		case "esc":
-			m.closeOverlay()
+			m.cancelOverlay()
 		case "backspace":
 			m.removePickerFilterRune()
 		case "up":
@@ -594,6 +601,24 @@ func (m *tuiModel) reloadAndReset() {
 			return
 		}
 		m.err = err.Error()
+		return
+	}
+	m.syncSelectionAfterReload()
+}
+
+func (m *tuiModel) syncSelectionAfterReload() {
+	if !m.showSidebar {
+		return
+	}
+	switch m.cmd.Kind {
+	case KindLocal, KindCompare, KindAhead, KindBehind, KindRecent:
+		if m.cursor < len(m.view.Files) {
+			m.loadSelectedFileDiff()
+		}
+	case KindHistory:
+		m.loadHistoryCommit()
+	case KindCommit:
+		m.loadCommitFile()
 	}
 }
 
@@ -822,8 +847,10 @@ func (m *tuiModel) choosePicker() {
 	value := m.pickerItems[m.pickerCursor]
 	switch m.overlay {
 	case overlayModes:
+		m.clearCancelCommand()
 		m.chooseMode(value)
 	case overlayBranch:
+		m.clearCancelCommand()
 		m.cmd.Target = value
 		m.closeOverlay()
 		if m.cmd.Options.FileFlag && m.cmd.Options.FilePath == "" {
@@ -833,6 +860,7 @@ func (m *tuiModel) choosePicker() {
 		}
 		m.reloadAndReset()
 	case overlayFile:
+		m.clearCancelCommand()
 		if m.cmd.Kind == KindHistory {
 			m.cmd.Path = value
 		} else {
@@ -842,6 +870,7 @@ func (m *tuiModel) choosePicker() {
 		m.closeOverlay()
 		m.reloadAndReset()
 	case overlayChangedFiles:
+		m.clearCancelCommand()
 		anchor := ""
 		if m.cursor < len(m.view.Commits) {
 			anchor = m.view.Commits[m.cursor].Hash
@@ -862,8 +891,12 @@ func (m *tuiModel) chooseMode(value string) {
 		m.cmd = Command{Kind: KindLocal, Options: Options{Layout: m.layout}}
 		m.reloadAndReset()
 	case "Compare/review branches":
+		m.rememberCancelCommand()
 		m.cmd = Command{Kind: KindCompare, Options: Options{Layout: m.layout}, Interactive: true}
 		m.openBranchPicker("Choose target branch")
+		if m.overlay != overlayBranch {
+			m.cancelOverlay()
+		}
 	case "Ahead of upstream":
 		m.cmd = Command{Kind: KindAhead, Options: Options{Layout: m.layout}}
 		m.reloadAndReset()
@@ -883,6 +916,7 @@ func (m *tuiModel) chooseMode(value string) {
 			m.err = err.Error()
 			return
 		}
+		m.rememberCancelCommand()
 		m.cmd = Command{Kind: KindHistory, Options: Options{Layout: m.layout}}
 		m.openFilePicker("Choose file for history", files)
 	case "Commit view":
@@ -1099,6 +1133,24 @@ func (m *tuiModel) closeOverlay() {
 	m.pickerAllItems = nil
 	m.pickerFilter = ""
 	m.input = ""
+}
+
+func (m *tuiModel) cancelOverlay() {
+	if m.hasCancelCmd {
+		m.cmd = m.cancelCmd
+		m.hasCancelCmd = false
+	}
+	m.closeOverlay()
+}
+
+func (m *tuiModel) rememberCancelCommand() {
+	m.cancelCmd = m.cmd
+	m.hasCancelCmd = true
+}
+
+func (m *tuiModel) clearCancelCommand() {
+	m.cancelCmd = Command{}
+	m.hasCancelCmd = false
 }
 
 func (m tuiModel) itemCount() int {

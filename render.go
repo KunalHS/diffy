@@ -371,8 +371,8 @@ func nextSpanStart(spans []InlineSpan, index, end int) int {
 }
 
 func displayFileNames(file DiffFile) (string, string) {
-	oldName := file.OldPath
-	newName := file.NewPath
+	oldName := displayDiffFileName(file.OldPath)
+	newName := displayDiffFileName(file.NewPath)
 	if oldName == "" {
 		oldName = "/dev/null"
 	}
@@ -380,6 +380,13 @@ func displayFileNames(file DiffFile) (string, string) {
 		newName = oldName
 	}
 	return oldName, newName
+}
+
+func displayDiffFileName(filePath string) string {
+	if filePath == "" || filePath == "/dev/null" {
+		return filePath
+	}
+	return sidebarFileName(filePath)
 }
 
 func collapsedLabel(context *CollapsedContext) string {

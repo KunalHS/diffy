@@ -137,6 +137,88 @@ func TestControllerAheadAndBehind(t *testing.T) {
 	}
 }
 
+func TestTUIReloadAndResetShowsSelectedFileDiff(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, repo, "alpha.txt", "alpha base\n")
+	writeFile(t, repo, "beta.txt", "beta base\n")
+	runGit(t, repo, "add", "alpha.txt", "beta.txt")
+	runGit(t, repo, "commit", "-m", "add files")
+
+	appendFile(t, repo, "alpha.txt", "alpha local\n")
+	appendFile(t, repo, "beta.txt", "beta local\n")
+
+	g := Git{Dir: repo}
+	m := tuiModel{
+		git:         g,
+		controller:  Controller{Git: g},
+		cmd:         Command{Kind: KindLocal, Options: Options{Layout: LayoutSplit}},
+		layout:      LayoutSplit,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+	m.reloadAndReset()
+
+	if len(m.view.Files) < 2 {
+		t.Fatalf("files = %#v, want at least two changed files", m.view.Files)
+	}
+	selected := m.view.Files[0].Path
+	if !strings.Contains(m.view.GitCommand, "-- "+selected) {
+		t.Fatalf("git command = %q, want selected file %q", m.view.GitCommand, selected)
+	}
+	for _, file := range m.view.Files[1:] {
+		if strings.Contains(m.view.Diff, " b/"+file.Path) || strings.Contains(m.view.Diff, " a/"+file.Path) {
+			t.Fatalf("diff includes non-selected file %q after reload:\n%s", file.Path, m.view.Diff)
+		}
+	}
+}
+
+func TestTUIComparePickerCancelKeepsLocalFileNavigation(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, repo, "alpha.txt", "alpha base\n")
+	writeFile(t, repo, "beta.txt", "beta base\n")
+	runGit(t, repo, "add", "alpha.txt", "beta.txt")
+	runGit(t, repo, "commit", "-m", "add files")
+
+	appendFile(t, repo, "alpha.txt", "alpha local\n")
+	appendFile(t, repo, "beta.txt", "beta local\n")
+
+	g := Git{Dir: repo}
+	m := tuiModel{
+		git:         g,
+		controller:  Controller{Git: g},
+		cmd:         Command{Kind: KindLocal, Options: Options{Layout: LayoutSplit}},
+		layout:      LayoutSplit,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+	m.reloadAndReset()
+	m.overlay = overlayModes
+	m.setPickerItems([]string{"Local changes", "Compare/review branches"})
+	m.pickerCursor = 1
+	m.choosePicker()
+
+	if m.overlay != overlayBranch {
+		t.Fatalf("overlay = %v, want branch picker", m.overlay)
+	}
+	if m.cmd.Kind != KindCompare {
+		t.Fatalf("pending command = %s, want compare", m.cmd.Kind)
+	}
+
+	updated, _ := m.updateOverlayKey("esc")
+	m = updated.(tuiModel)
+	if m.cmd.Kind != KindLocal {
+		t.Fatalf("command after cancel = %s, want local", m.cmd.Kind)
+	}
+
+	m.moveCursor(1)
+	selected := m.view.Files[m.cursor].Path
+	if !strings.Contains(m.view.GitCommand, "-- "+selected) {
+		t.Fatalf("git command after moving = %q, want selected file %q", m.view.GitCommand, selected)
+	}
+}
+
 func newFixtureRepo(t *testing.T) string {
 	t.Helper()
 	if err := os.MkdirAll(".testtmp", 0o755); err != nil {

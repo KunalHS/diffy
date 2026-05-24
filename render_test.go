@@ -90,6 +90,25 @@ func TestSplitRenderUsesPaneDividerNotTextPipe(t *testing.T) {
 	}
 }
 
+func TestDiffHeadersShowFileNameOnly(t *testing.T) {
+	diff := `diff --git a/core/src/main/java/com/ontic/core/scheduler/jobs/watchconfig/handler/PublicRecordWatchConfigProcessor.java b/core/src/main/java/com/ontic/core/scheduler/jobs/watchconfig/handler/PublicRecordWatchConfigProcessor.java
+--- a/core/src/main/java/com/ontic/core/scheduler/jobs/watchconfig/handler/PublicRecordWatchConfigProcessor.java
++++ b/core/src/main/java/com/ontic/core/scheduler/jobs/watchconfig/handler/PublicRecordWatchConfigProcessor.java
+@@ -1,1 +1,1 @@
+-old
++new`
+
+	for _, layout := range []Layout{LayoutSplit, LayoutUnified} {
+		joined := strings.Join(RenderDiff(diff, layout, 120), "\n")
+		if strings.Contains(joined, "core/src/main/java") {
+			t.Fatalf("%s header should not include full path:\n%s", layout, joined)
+		}
+		if !strings.Contains(joined, "PublicRecordWatchConfigProcessor.java") {
+			t.Fatalf("%s header missing file name:\n%s", layout, joined)
+		}
+	}
+}
+
 func TestSplitRenderShowsChangeLaneMarkers(t *testing.T) {
 	diff := `diff --git a/app.txt b/app.txt
 --- a/app.txt
