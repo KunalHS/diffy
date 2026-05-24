@@ -434,6 +434,14 @@ func renderFileLine(file FileStat, width int) string {
 	return fmt.Sprintf("%s +%d -%d", name, file.Add, file.Del)
 }
 
+func renderStashLine(stash StashItem, width int) string {
+	label := stash.Ref
+	if stash.Subject != "" {
+		label += " " + stash.Subject
+	}
+	return truncate(label, width)
+}
+
 func sidebarFileName(filePath string) string {
 	name := path.Base(filePath)
 	if name == "." || name == "/" {

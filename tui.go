@@ -342,13 +342,13 @@ func (m tuiModel) updateMouse(msg tea.MouseMsg) tuiModel {
 		if msg.Action == tea.MouseActionPress {
 			sidebarWidth := m.sidebarWidth()
 			if msg.X < sidebarWidth && msg.Y > 1 && msg.Y < m.height-1 {
-				idx := msg.Y - 2
-				if idx >= 0 && idx < m.itemCount() {
-					m.cursor = idx
+				row := msg.Y - 2
+				count := m.itemCount()
+				contentHeight := m.sidebarContentHeight(m.height - 2)
+				visible := sidebarVisibleCount(count, contentHeight)
+				if row >= 0 && row < visible {
+					m.selectAt(sidebarSelectableStart(count, contentHeight, m.cursor) + row)
 					m.diffFocused = false
-					m.hScroll = 0
-					m.resetDiffExpansion()
-					m.selectCurrentItem()
 				}
 			}
 		}
@@ -447,55 +447,91 @@ func (m tuiModel) renderBody() string {
 }
 
 func (m tuiModel) renderSidebar(width, height int) string {
-	var lines []string
-	switch m.cmd.Kind {
-	case KindHistory:
-		lines = append(lines, styleMuted.Render("Commits"))
-		for i, item := range m.view.Commits {
-			line := truncate(item.Raw, width-3)
-			if i == m.cursor {
-				line = styleSelected.Width(width - 3).Render(line)
-			}
-			lines = append(lines, line)
-		}
-	case KindStash:
-		lines = append(lines, styleMuted.Render("Stashes"))
-		for i, item := range m.view.Stashes {
-			line := truncate(item.Raw, width-3)
-			if i == m.cursor {
-				line = styleSelected.Width(width - 3).Render(line)
-			}
-			lines = append(lines, line)
-		}
-		lines = append(lines, "", styleMuted.Render("Files"))
-		for _, file := range m.view.Files {
-			lines = append(lines, truncate(renderFileLine(file, width-3), width-3))
-		}
-	default:
-		lines = append(lines, styleMuted.Render("Files"))
-		for i, file := range m.view.Files {
-			line := truncate(renderFileLine(file, width-3), width-3)
-			if i == m.cursor {
-				line = styleSelected.Width(width - 3).Render(line)
-			}
-			lines = append(lines, line)
-		}
-		if len(m.view.Commits) > 0 {
-			lines = append(lines, "", styleMuted.Render("Commits"))
-			for _, commit := range m.view.Commits {
-				lines = append(lines, truncate(commit.Raw, width-3))
-			}
-		}
-	}
+	commandBlock := []string{}
+	contentHeight := m.sidebarContentHeight(height)
 	if m.showGitCmd && strings.TrimSpace(m.view.GitCommand) != "" {
-		commandBlock := []string{"", styleMuted.Render("Git"), truncate(m.view.GitCommand, width-3)}
-		contentHeight := height - len(commandBlock)
-		if contentHeight < 0 {
-			contentHeight = 0
-		}
+		commandBlock = []string{"", styleMuted.Render("Git"), truncate(m.view.GitCommand, sidebarLineWidth(width))}
+	}
+
+	lines := m.renderSidebarContent(width, contentHeight)
+	if len(commandBlock) > 0 {
 		lines = append(limitLines(lines, contentHeight), commandBlock...)
 	}
 	return styleSidebar.Width(width - 2).Height(height).Render(strings.Join(limitLines(lines, height), "\n"))
+}
+
+func (m tuiModel) renderSidebarContent(width, height int) []string {
+	switch m.cmd.Kind {
+	case KindHistory:
+		return m.renderSelectableSidebar("Commits", len(m.view.Commits), width, height, func(i int) string {
+			return m.view.Commits[i].Raw
+		})
+	case KindStash:
+		return m.renderSelectableSidebar("Stashes", len(m.view.Stashes), width, height, func(i int) string {
+			return renderStashLine(m.view.Stashes[i], sidebarLineWidth(width))
+		})
+	default:
+		return m.renderSelectableSidebar("Files", len(m.view.Files), width, height, func(i int) string {
+			return renderFileLine(m.view.Files[i], sidebarLineWidth(width))
+		})
+	}
+}
+
+func (m tuiModel) renderSelectableSidebar(title string, count, width, height int, label func(int) string) []string {
+	lineWidth := sidebarLineWidth(width)
+	lines := []string{styleMuted.Render(title)}
+	if count == 0 || height <= 1 {
+		return lines
+	}
+	visible := sidebarVisibleCount(count, height)
+	start := sidebarSelectableStart(count, height, m.cursor)
+	for i := start; i < start+visible && i < count; i++ {
+		line := truncate(label(i), lineWidth)
+		if i == m.cursor {
+			line = styleSelected.Width(lineWidth).Render(line)
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func (m tuiModel) sidebarContentHeight(height int) int {
+	if m.showGitCmd && strings.TrimSpace(m.view.GitCommand) != "" {
+		height -= 3
+	}
+	if height < 0 {
+		return 0
+	}
+	return height
+}
+
+func sidebarVisibleCount(count, height int) int {
+	visible := height - 1
+	if visible < 0 {
+		return 0
+	}
+	if visible > count {
+		return count
+	}
+	return visible
+}
+
+func sidebarSelectableStart(count, height, cursor int) int {
+	visible := sidebarVisibleCount(count, height)
+	if visible == 0 {
+		return 0
+	}
+	start := 0
+	if cursor >= visible {
+		start = cursor - visible + 1
+	}
+	if start > count-visible {
+		start = count - visible
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
 }
 
 func (m tuiModel) renderMain(width, height int) string {
@@ -666,7 +702,15 @@ func (m *tuiModel) moveCursor(delta int) {
 	if count == 0 {
 		return
 	}
-	m.cursor += delta
+	m.selectAt(m.cursor + delta)
+}
+
+func (m *tuiModel) selectAt(index int) {
+	count := m.itemCount()
+	if count == 0 {
+		return
+	}
+	m.cursor = index
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
@@ -676,16 +720,7 @@ func (m *tuiModel) moveCursor(delta int) {
 	m.scroll = 0
 	m.hScroll = 0
 	m.resetDiffExpansion()
-	if m.cmd.Kind == KindHistory {
-		m.loadHistoryCommit()
-	} else if m.cmd.Kind == KindCommit {
-		m.loadCommitFile()
-	} else if m.cursor < len(m.view.Files) {
-		m.loadSelectedFileDiff()
-	}
-	if m.cmd.Kind == KindStash {
-		m.loadStash()
-	}
+	m.selectCurrentItem()
 }
 
 func (m *tuiModel) focusDiff() {
@@ -1189,7 +1224,9 @@ func (m *tuiModel) loadStash() {
 	}
 	ref := m.view.Stashes[m.cursor].Ref
 	m.cmd.StashRef = ref
-	m.reloadAndReset()
+	if err := m.reload(); err != nil {
+		m.err = err.Error()
+	}
 }
 
 func (m *tuiModel) closeOverlay() {
@@ -1241,6 +1278,14 @@ func (m tuiModel) sidebarWidth() int {
 		return 48
 	}
 	return width
+}
+
+func sidebarLineWidth(width int) int {
+	lineWidth := width - 6
+	if lineWidth < 1 {
+		return 1
+	}
+	return lineWidth
 }
 
 func filePaths(files []FileStat) []string {

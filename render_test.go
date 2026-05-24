@@ -410,6 +410,110 @@ func TestSidebarFileLineShowsFileNameOnly(t *testing.T) {
 	}
 }
 
+func TestCompareSidebarUsesSameFileListAsLocal(t *testing.T) {
+	model := tuiModel{
+		cmd: Command{Kind: KindCompare},
+		view: ViewData{
+			Files: []FileStat{
+				{Path: "src/App.java", Add: 3, Del: 1},
+				{Path: "src/Thing.java", Add: 2},
+			},
+			Commits: []CommitItem{{Hash: "abc123", Raw: "abc123 compare commit"}},
+		},
+	}
+
+	sidebar := model.renderSidebar(40, 12)
+	if !strings.Contains(sidebar, "Files") || !strings.Contains(sidebar, "App.java +3 -1") {
+		t.Fatalf("compare sidebar missing file list:\n%s", sidebar)
+	}
+	if strings.Contains(sidebar, "Commits") || strings.Contains(sidebar, "compare commit") {
+		t.Fatalf("compare sidebar should stay files-only like local:\n%s", sidebar)
+	}
+}
+
+func TestStashSidebarShowsBoundedStashListOnly(t *testing.T) {
+	stashes := make([]StashItem, 40)
+	for i := range stashes {
+		stashes[i] = StashItem{
+			Ref:     fmt.Sprintf("stash@{%d}", i),
+			Subject: fmt.Sprintf("WIP on branch-%02d with a long subject", i),
+		}
+	}
+	model := tuiModel{
+		cmd:    Command{Kind: KindStash},
+		view:   ViewData{Stashes: stashes, Files: []FileStat{{Path: "app.go", Add: 1}}},
+		cursor: 35,
+	}
+
+	sidebar := model.renderSidebar(48, 12)
+	if !strings.Contains(sidebar, "Stashes") || !strings.Contains(sidebar, "stash@{35}") {
+		t.Fatalf("stash sidebar did not keep selected stash visible:\n%s", sidebar)
+	}
+	if strings.Contains(sidebar, "Files") || strings.Contains(sidebar, "app.go") {
+		t.Fatalf("stash sidebar should not mix files into the selectable stash list:\n%s", sidebar)
+	}
+	if strings.Contains(sidebar, "stash@{0}") {
+		t.Fatalf("stash sidebar did not scroll to selected stash:\n%s", sidebar)
+	}
+}
+
+func TestMouseSelectUsesSameScrollResetAsKeyboard(t *testing.T) {
+	model := tuiModel{
+		width:       80,
+		height:      20,
+		showSidebar: true,
+		cmd:         Command{Kind: KindFile},
+		view: ViewData{
+			Files: []FileStat{{Path: "one.go"}, {Path: "two.go"}},
+			Diff:  "old diff",
+		},
+		scroll:  12,
+		hScroll: 8,
+	}
+
+	updated := model.updateMouse(tea.MouseMsg{
+		Type:   tea.MouseLeft,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+		X:      2,
+		Y:      3,
+	})
+
+	if updated.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", updated.cursor)
+	}
+	if updated.scroll != 0 || updated.hScroll != 0 {
+		t.Fatalf("scroll reset = (%d,%d), want (0,0)", updated.scroll, updated.hScroll)
+	}
+}
+
+func TestMouseSelectUsesVisibleSidebarOffset(t *testing.T) {
+	files := make([]FileStat, 40)
+	for i := range files {
+		files[i] = FileStat{Path: fmt.Sprintf("file-%02d.go", i)}
+	}
+	model := tuiModel{
+		width:       90,
+		height:      14,
+		showSidebar: true,
+		cmd:         Command{Kind: KindFile},
+		view:        ViewData{Files: files, Diff: "old diff"},
+		cursor:      35,
+	}
+
+	updated := model.updateMouse(tea.MouseMsg{
+		Type:   tea.MouseLeft,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+		X:      2,
+		Y:      2,
+	})
+
+	if updated.cursor != 25 {
+		t.Fatalf("cursor = %d, want visible row offset 25", updated.cursor)
+	}
+}
+
 func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 	model := tuiModel{
 		width:  120,

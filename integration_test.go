@@ -219,6 +219,43 @@ func TestTUIComparePickerCancelKeepsLocalFileNavigation(t *testing.T) {
 	}
 }
 
+func TestTUIStashSelectionDoesNotResetCursor(t *testing.T) {
+	repo := newFixtureRepo(t)
+
+	appendFile(t, repo, "app.txt", "first stash change\n")
+	runGit(t, repo, "stash", "push", "-m", "first stash")
+	appendFile(t, repo, "app.txt", "second stash change\n")
+	runGit(t, repo, "stash", "push", "-m", "second stash")
+
+	g := Git{Dir: repo}
+	m := tuiModel{
+		git:         g,
+		controller:  Controller{Git: g},
+		cmd:         Command{Kind: KindStash, Options: Options{Layout: LayoutSplit}},
+		layout:      LayoutSplit,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+	m.reloadAndReset()
+	if len(m.view.Stashes) < 2 {
+		t.Fatalf("stashes = %#v, want at least two", m.view.Stashes)
+	}
+	selectedRef := m.view.Stashes[1].Ref
+
+	m.moveCursor(1)
+
+	if m.cursor != 1 {
+		t.Fatalf("cursor reset to %d, want 1", m.cursor)
+	}
+	if m.cmd.StashRef != selectedRef || m.view.Subtitle != selectedRef {
+		t.Fatalf("selected stash = cmd %q subtitle %q, want %q", m.cmd.StashRef, m.view.Subtitle, selectedRef)
+	}
+	if !strings.Contains(m.view.Diff, "first stash change") {
+		t.Fatalf("stash diff did not load selected stash:\n%s", m.view.Diff)
+	}
+}
+
 func newFixtureRepo(t *testing.T) string {
 	t.Helper()
 	if err := os.MkdirAll(".testtmp", 0o755); err != nil {
