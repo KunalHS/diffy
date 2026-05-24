@@ -1,0 +1,1007 @@
+package main
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+type overlayKind int
+
+const (
+	overlayNone overlayKind = iota
+	overlayModes
+	overlayBranch
+	overlayFile
+	overlayPrompt
+	overlayConfirm
+	overlayChangedFiles
+)
+
+type promptKind string
+
+const (
+	promptCompareTarget promptKind = "compare-target"
+	promptRecentCount   promptKind = "recent-count"
+	promptFileCompare   promptKind = "file-compare"
+	promptHistoryFile   promptKind = "history-file"
+	promptCommit        promptKind = "commit"
+)
+
+type tuiModel struct {
+	cfg        Config
+	git        Git
+	controller Controller
+	cmd        Command
+	view       ViewData
+
+	width        int
+	height       int
+	cursor       int
+	stashCursor  int
+	commitCursor int
+	scroll       int
+	hScroll      int
+	layout       Layout
+	overlay      overlayKind
+	pickerTitle  string
+	pickerItems  []string
+	pickerCursor int
+	pickerScroll int
+	promptKind   promptKind
+	promptTitle  string
+	input        string
+	confirmText  string
+	confirmCmd   []string
+	message      string
+	err          string
+	lastHistory  *Command
+	showSidebar  bool
+	showGitCmd   bool
+	diffFocused  bool
+}
+
+func RunTUI(cmd Command, cfg Config) error {
+	m := newTUIModel(cmd, cfg)
+	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	_, err := program.Run()
+	return err
+}
+
+func newTUIModel(cmd Command, cfg Config) tuiModel {
+	m := tuiModel{
+		cfg:         cfg,
+		git:         Git{},
+		controller:  Controller{Git: Git{}},
+		cmd:         cmd,
+		layout:      cmd.Options.Layout,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+	m.loadInitial()
+	return m
+}
+
+func (m *tuiModel) loadInitial() {
+	if m.cmd.Kind == KindCompare && m.cmd.Target == "" {
+		m.openBranchPicker("Choose target branch")
+		return
+	}
+	if (m.cmd.Options.FileFlag && m.cmd.Options.FilePath == "") && supportsFilePicker(m.cmd.Kind) {
+		if err := m.reload(); err != nil {
+			m.err = err.Error()
+			return
+		}
+		m.openFilePicker("Restrict to file", filePaths(m.view.Files))
+		return
+	}
+	if m.cmd.Kind == KindHistory && m.cmd.Path == "" {
+		files, err := m.git.TrackedFiles()
+		if err != nil {
+			m.err = err.Error()
+			return
+		}
+		m.openFilePicker("Choose file for history", files)
+		return
+	}
+	if err := m.reload(); err != nil {
+		m.err = err.Error()
+	}
+}
+
+func (m tuiModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+	case tea.KeyMsg:
+		return m.updateKey(msg)
+	case tea.MouseMsg:
+		return m.updateMouse(msg), nil
+	}
+	return m, nil
+}
+
+func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "ctrl+c" {
+		return m, tea.Quit
+	}
+	if m.overlay != overlayNone {
+		return m.updateOverlayKey(key)
+	}
+	switch key {
+	case "q":
+		return m, tea.Quit
+	case "esc":
+		if m.diffFocused {
+			m.diffFocused = false
+			return m, nil
+		}
+		if m.canClearFileRestriction() {
+			m.clearFileRestriction()
+			return m, nil
+		}
+		if m.lastHistory != nil && m.cmd.Kind == KindCommit {
+			m.cmd = *m.lastHistory
+			m.lastHistory = nil
+			m.reloadAndReset()
+		}
+	case "up", "k":
+		if m.diffFocused {
+			m.scroll--
+			if m.scroll < 0 {
+				m.scroll = 0
+			}
+		} else {
+			m.moveCursor(-1)
+		}
+	case "down", "j":
+		if m.diffFocused {
+			m.scroll++
+		} else {
+			m.moveCursor(1)
+		}
+	case "h":
+		if m.diffFocused {
+			m.hScroll -= 8
+			if m.hScroll < 0 {
+				m.hScroll = 0
+			}
+		}
+	case "l":
+		if m.diffFocused {
+			m.hScroll += 8
+		} else if m.view.SourceIsCurrent && m.cmd.Kind == KindCompare {
+			m.cmd = Command{Kind: KindLocal, Options: Options{Layout: m.layout}}
+			m.reloadAndReset()
+		}
+	case "pgup", "b":
+		m.scroll -= 10
+		if m.scroll < 0 {
+			m.scroll = 0
+		}
+	case "pgdown", " ":
+		m.scroll += 10
+	case "f":
+		if m.cmd.Kind == KindHistory {
+			m.openChangedFilesForSelectedCommit()
+		} else if !m.canClearFileRestriction() {
+			m.restrictToFile()
+		}
+	case "enter":
+		if m.diffFocused {
+			m.diffFocused = false
+		} else {
+			m.focusDiff()
+		}
+	case "s":
+		m.showSidebar = !m.showSidebar
+	case "g":
+		m.showGitCmd = !m.showGitCmd
+	case "/":
+		m.overlay = overlayModes
+		m.pickerTitle = "Modes"
+		m.pickerItems = []string{"Local changes", "Compare/review branches", "Ahead of upstream", "Behind upstream", "Recent commits", "File compare", "Stash", "File history", "Commit view"}
+		m.pickerCursor = 0
+	case "1":
+		m.layout = LayoutUnified
+	case "2":
+		m.layout = LayoutSplit
+	case "r":
+		m.reloadAndReset()
+	case "c":
+		if m.cmd.Kind == KindHistory && len(m.view.Commits) > 0 {
+			m.lastHistory = &m.cmd
+			m.cmd = Command{Kind: KindCommit, Commit: m.view.Commits[m.cursor].Hash, Options: Options{Layout: m.layout}}
+			m.reloadAndReset()
+		}
+	case "a", "p", "d":
+		if m.cmd.Kind == KindStash {
+			m.prepareStashAction(key)
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) updateOverlayKey(key string) (tea.Model, tea.Cmd) {
+	switch m.overlay {
+	case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
+		switch key {
+		case "esc":
+			m.closeOverlay()
+		case "up", "k":
+			if m.pickerCursor > 0 {
+				m.pickerCursor--
+			}
+		case "down", "j":
+			if m.pickerCursor < len(m.pickerItems)-1 {
+				m.pickerCursor++
+			}
+		case "enter":
+			m.choosePicker()
+		}
+	case overlayPrompt:
+		switch key {
+		case "esc":
+			m.closeOverlay()
+		case "enter":
+			m.submitPrompt()
+		case "backspace":
+			if len(m.input) > 0 {
+				m.input = m.input[:len(m.input)-1]
+			}
+		default:
+			if len(key) == 1 {
+				m.input += key
+			}
+		}
+	case overlayConfirm:
+		switch key {
+		case "esc", "n":
+			m.closeOverlay()
+		case "enter", "y":
+			out, err := m.git.Run(m.confirmCmd...)
+			if err != nil {
+				m.err = err.Error()
+			} else {
+				m.message = strings.TrimSpace(out)
+				if m.message == "" {
+					m.message = "Command completed."
+				}
+			}
+			m.closeOverlay()
+			m.reloadAndReset()
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) updateMouse(msg tea.MouseMsg) tuiModel {
+	if m.overlay != overlayNone {
+		return m.updateOverlayMouse(msg)
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if m.scroll > 0 {
+			m.scroll--
+		}
+	case tea.MouseButtonWheelDown:
+		m.scroll++
+	case tea.MouseButtonLeft:
+		if msg.Action == tea.MouseActionPress {
+			sidebarWidth := m.sidebarWidth()
+			if msg.X < sidebarWidth && msg.Y > 1 && msg.Y < m.height-1 {
+				idx := msg.Y - 2
+				if idx >= 0 && idx < m.itemCount() {
+					m.cursor = idx
+					m.diffFocused = false
+					m.hScroll = 0
+					m.selectCurrentItem()
+				}
+			}
+		}
+	}
+	return m
+}
+
+func (m tuiModel) updateOverlayMouse(msg tea.MouseMsg) tuiModel {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+		}
+	case tea.MouseButtonWheelDown:
+		if m.pickerCursor < len(m.pickerItems)-1 {
+			m.pickerCursor++
+		}
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionPress {
+			return m
+		}
+		switch m.overlay {
+		case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
+			_, top, _, _ := m.overlayBounds()
+			idx := msg.Y - top - 4
+			if idx >= 0 && idx < len(m.pickerItems) {
+				m.pickerCursor = idx
+				m.choosePicker()
+			}
+		case overlayConfirm:
+			_, _, _, bottom := m.overlayBounds()
+			if msg.Y >= bottom-2 {
+				out, err := m.git.Run(m.confirmCmd...)
+				if err != nil {
+					m.err = err.Error()
+				} else {
+					m.message = strings.TrimSpace(out)
+					if m.message == "" {
+						m.message = "Command completed."
+					}
+				}
+				m.closeOverlay()
+				m.reloadAndReset()
+			}
+		}
+	}
+	return m
+}
+
+func (m tuiModel) View() string {
+	if m.err != "" {
+		return styleError.Render(m.err) + "\n\n" + styleBottom.Render("q quit")
+	}
+	top := m.renderTop()
+	body := m.renderBody()
+	bottom := m.renderBottom()
+	view := lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
+	if m.overlay != overlayNone {
+		return placeOverlay(view, m.renderOverlay(), m.width, m.height)
+	}
+	return view
+}
+
+func (m tuiModel) renderTop() string {
+	add, del := totalCounts(m.view.Files)
+	title := m.view.Title
+	if title == "" {
+		title = string(m.cmd.Kind)
+	}
+	meta := fmt.Sprintf("%s  %s  +%d -%d", title, m.view.Subtitle, add, del)
+	if m.view.RestrictedPath != "" {
+		meta += "  file: " + m.view.RestrictedPath
+	}
+	return styleTop.Width(m.width).Render(truncate(meta, m.width-2))
+}
+
+func (m tuiModel) renderBody() string {
+	bodyHeight := m.height - 2
+	if bodyHeight < 5 {
+		bodyHeight = 5
+	}
+	if !m.showSidebar {
+		return m.renderMain(m.width, bodyHeight)
+	}
+	sidebarWidth := m.sidebarWidth()
+	mainWidth := m.width - sidebarWidth
+	if mainWidth < 30 {
+		mainWidth = 30
+	}
+	main := m.renderMain(mainWidth, bodyHeight)
+	sidebar := m.renderSidebar(sidebarWidth, bodyHeight)
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
+}
+
+func (m tuiModel) renderSidebar(width, height int) string {
+	var lines []string
+	switch m.cmd.Kind {
+	case KindHistory:
+		lines = append(lines, styleMuted.Render("Commits"))
+		for i, item := range m.view.Commits {
+			line := truncate(item.Raw, width-3)
+			if i == m.cursor {
+				line = styleSelected.Width(width - 3).Render(line)
+			}
+			lines = append(lines, line)
+		}
+	case KindStash:
+		lines = append(lines, styleMuted.Render("Stashes"))
+		for i, item := range m.view.Stashes {
+			line := truncate(item.Raw, width-3)
+			if i == m.cursor {
+				line = styleSelected.Width(width - 3).Render(line)
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "", styleMuted.Render("Files"))
+		for _, file := range m.view.Files {
+			lines = append(lines, truncate(renderFileLine(file, width-3), width-3))
+		}
+	default:
+		lines = append(lines, styleMuted.Render("Files"))
+		for i, file := range m.view.Files {
+			line := truncate(renderFileLine(file, width-3), width-3)
+			if i == m.cursor {
+				line = styleSelected.Width(width - 3).Render(line)
+			}
+			lines = append(lines, line)
+		}
+		if len(m.view.Commits) > 0 {
+			lines = append(lines, "", styleMuted.Render("Commits"))
+			for _, commit := range m.view.Commits {
+				lines = append(lines, truncate(commit.Raw, width-3))
+			}
+		}
+	}
+	if m.showGitCmd && strings.TrimSpace(m.view.GitCommand) != "" {
+		commandBlock := []string{"", styleMuted.Render("Git"), truncate(m.view.GitCommand, width-3)}
+		contentHeight := height - len(commandBlock)
+		if contentHeight < 0 {
+			contentHeight = 0
+		}
+		lines = append(limitLines(lines, contentHeight), commandBlock...)
+	}
+	return styleSidebar.Width(width - 2).Height(height).Render(strings.Join(limitLines(lines, height), "\n"))
+}
+
+func (m tuiModel) renderMain(width, height int) string {
+	diffWidth := width - 2
+	lines := RenderDiffViewport(m.view.Diff, m.layout, diffWidth, m.hScroll)
+	if m.scroll > len(lines) {
+		m.scroll = len(lines)
+	}
+	end := m.scroll + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	visible := lines[m.scroll:end]
+	if len(visible) == 0 && m.view.Message != "" {
+		visible = []string{m.view.Message}
+	}
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Render(strings.Join(limitLines(visible, height), "\n"))
+}
+
+func (m tuiModel) renderBottom() string {
+	var hints []string
+	gitHint := "g git"
+	if m.showGitCmd {
+		gitHint = "g hide git"
+	}
+	if m.diffFocused {
+		hints = []string{"q quit", "/ modes", "esc files", "j/k scroll", "h/l scroll", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
+	} else {
+		hints = []string{"q quit", "/ modes"}
+		if m.canClearFileRestriction() {
+			hints = append(hints, "esc clear file")
+		}
+		hints = append(hints, "j/k move", "enter diff", "s sidebar", gitHint, "1 unified", "2 split")
+		if supportsFilePicker(m.cmd.Kind) && !m.canClearFileRestriction() {
+			hints = append(hints, "f file")
+		}
+		hints = append(hints, "r refresh")
+	}
+	if !m.diffFocused && m.view.SourceIsCurrent && m.cmd.Kind == KindCompare {
+		hints = append(hints, "l local")
+	}
+	if m.cmd.Kind == KindStash {
+		hints = append(hints, "a apply", "p pop", "d drop")
+	}
+	if m.cmd.Kind == KindHistory {
+		hints = append(hints, "c commit")
+	}
+	if m.message != "" {
+		hints = append([]string{m.message}, hints...)
+	}
+	return styleBottom.Width(m.width).Render(truncate(strings.Join(hints, "  "), m.width-2))
+}
+
+func (m tuiModel) renderOverlay() string {
+	switch m.overlay {
+	case overlayModes, overlayBranch, overlayFile, overlayChangedFiles:
+		var lines []string
+		lines = append(lines, m.pickerTitle, "")
+		for i, item := range m.pickerItems {
+			line := item
+			if i == m.pickerCursor {
+				line = styleSelected.Render("> " + item)
+			} else {
+				line = "  " + item
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "", "enter select   esc cancel")
+		return stylePopup.Render(strings.Join(lines, "\n"))
+	case overlayPrompt:
+		return stylePopup.Render(m.promptTitle + "\n\n" + m.input + "\n\nenter submit   esc cancel")
+	case overlayConfirm:
+		return stylePopup.Render(m.confirmText + "\n\ngit " + strings.Join(m.confirmCmd, " ") + "\n\nenter/y confirm   esc/n cancel")
+	default:
+		return ""
+	}
+}
+
+func (m *tuiModel) reload() error {
+	view, err := m.controller.Build(m.cmd)
+	if err != nil {
+		return err
+	}
+	m.view = view
+	if m.cursor >= m.itemCount() {
+		m.cursor = max(0, m.itemCount()-1)
+	}
+	return nil
+}
+
+func (m *tuiModel) reloadAndReset() {
+	m.scroll = 0
+	m.hScroll = 0
+	m.diffFocused = false
+	m.cursor = 0
+	if err := m.reload(); err != nil {
+		var pickerErr pickerNeededError
+		if strings.Contains(err.Error(), "selector required") || pickerErr.Kind != "" {
+			m.err = err.Error()
+			return
+		}
+		m.err = err.Error()
+	}
+}
+
+func (m *tuiModel) moveCursor(delta int) {
+	count := m.itemCount()
+	if count == 0 {
+		return
+	}
+	m.cursor += delta
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= count {
+		m.cursor = count - 1
+	}
+	m.scroll = 0
+	m.hScroll = 0
+	if m.cmd.Kind == KindHistory {
+		m.loadHistoryCommit()
+	} else if m.cmd.Kind == KindCommit {
+		m.loadCommitFile()
+	} else if m.cursor < len(m.view.Files) {
+		m.loadSelectedFileDiff()
+	}
+	if m.cmd.Kind == KindStash {
+		m.loadStash()
+	}
+}
+
+func (m *tuiModel) focusDiff() {
+	if strings.TrimSpace(m.view.Diff) == "" && m.view.Message == "" {
+		return
+	}
+	m.diffFocused = true
+}
+
+func (m *tuiModel) selectCurrentItem() {
+	switch m.cmd.Kind {
+	case KindHistory:
+		m.loadHistoryCommit()
+	case KindStash:
+		m.loadStash()
+	case KindCommit:
+		m.loadCommitFile()
+	default:
+		if m.cursor < len(m.view.Files) {
+			m.loadSelectedFileDiff()
+		}
+	}
+}
+
+func (m *tuiModel) restrictToFile() {
+	if m.view.RestrictedPath != "" {
+		return
+	}
+	m.openFilePicker("Restrict to file", filePaths(m.view.Files))
+}
+
+func (m *tuiModel) clearFileRestriction() {
+	if !m.canClearFileRestriction() {
+		return
+	}
+	m.cmd.Options.FilePath = ""
+	m.cmd.Options.FileFlag = false
+	m.reloadAndReset()
+}
+
+func (m tuiModel) canClearFileRestriction() bool {
+	return supportsFilePicker(m.cmd.Kind) && m.view.RestrictedPath != ""
+}
+
+func (m *tuiModel) openBranchPicker(title string) {
+	items, err := m.git.Branches()
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.overlay = overlayBranch
+	m.pickerTitle = title
+	m.pickerItems = items
+	m.pickerCursor = 0
+}
+
+func (m *tuiModel) openFilePicker(title string, items []string) {
+	m.overlay = overlayFile
+	m.pickerTitle = title
+	m.pickerItems = items
+	m.pickerCursor = 0
+}
+
+func (m *tuiModel) choosePicker() {
+	if m.pickerCursor < 0 || m.pickerCursor >= len(m.pickerItems) {
+		m.closeOverlay()
+		return
+	}
+	value := m.pickerItems[m.pickerCursor]
+	switch m.overlay {
+	case overlayModes:
+		m.chooseMode(value)
+	case overlayBranch:
+		m.cmd.Target = value
+		m.closeOverlay()
+		if m.cmd.Options.FileFlag && m.cmd.Options.FilePath == "" {
+			m.reload()
+			m.openFilePicker("Restrict to file", filePaths(m.view.Files))
+			return
+		}
+		m.reloadAndReset()
+	case overlayFile:
+		if m.cmd.Kind == KindHistory {
+			m.cmd.Path = value
+		} else {
+			m.cmd.Options.FileFlag = true
+			m.cmd.Options.FilePath = value
+		}
+		m.closeOverlay()
+		m.reloadAndReset()
+	case overlayChangedFiles:
+		anchor := ""
+		if m.cursor < len(m.view.Commits) {
+			anchor = m.view.Commits[m.cursor].Hash
+		}
+		m.cmd = Command{Kind: KindHistory, Path: value, Options: Options{Layout: m.layout}}
+		m.closeOverlay()
+		m.reloadAndReset()
+		if anchor != "" {
+			m.anchorCommit(anchor)
+		}
+	}
+}
+
+func (m *tuiModel) chooseMode(value string) {
+	m.closeOverlay()
+	switch value {
+	case "Local changes":
+		m.cmd = Command{Kind: KindLocal, Options: Options{Layout: m.layout}}
+		m.reloadAndReset()
+	case "Compare/review branches":
+		m.cmd = Command{Kind: KindCompare, Options: Options{Layout: m.layout}, Interactive: true}
+		m.openBranchPicker("Choose target branch")
+	case "Ahead of upstream":
+		m.cmd = Command{Kind: KindAhead, Options: Options{Layout: m.layout}}
+		m.reloadAndReset()
+	case "Behind upstream":
+		m.cmd = Command{Kind: KindBehind, Options: Options{Layout: m.layout}}
+		m.reloadAndReset()
+	case "Recent commits":
+		m.openPrompt(promptRecentCount, "Recent commit count")
+	case "File compare":
+		m.openPrompt(promptFileCompare, "File compare: <path> <ref> [to-ref]")
+	case "Stash":
+		m.cmd = Command{Kind: KindStash, Options: Options{Layout: m.layout}}
+		m.reloadAndReset()
+	case "File history":
+		files, err := m.git.TrackedFiles()
+		if err != nil {
+			m.err = err.Error()
+			return
+		}
+		m.cmd = Command{Kind: KindHistory, Options: Options{Layout: m.layout}}
+		m.openFilePicker("Choose file for history", files)
+	case "Commit view":
+		m.openPrompt(promptCommit, "Commit ref")
+	}
+}
+
+func (m *tuiModel) openPrompt(kind promptKind, title string) {
+	m.overlay = overlayPrompt
+	m.promptKind = kind
+	m.promptTitle = title
+	m.input = ""
+}
+
+func (m *tuiModel) submitPrompt() {
+	input := strings.TrimSpace(m.input)
+	m.closeOverlay()
+	switch m.promptKind {
+	case promptRecentCount:
+		n, err := strconv.Atoi(input)
+		if err != nil || n < 1 {
+			m.err = "recent count must be a positive integer"
+			return
+		}
+		m.cmd = Command{Kind: KindRecent, Count: n, Options: Options{Layout: m.layout}}
+	case promptFileCompare:
+		parts := strings.Fields(input)
+		if len(parts) != 2 && len(parts) != 3 {
+			m.err = "file compare needs: <path> <ref> [to-ref]"
+			return
+		}
+		m.cmd = Command{Kind: KindFile, Path: parts[0], Options: Options{Layout: m.layout}}
+		if len(parts) == 2 {
+			m.cmd.Ref = parts[1]
+		} else {
+			m.cmd.FromRef = parts[1]
+			m.cmd.ToRef = parts[2]
+		}
+	case promptHistoryFile:
+		m.cmd = Command{Kind: KindHistory, Path: input, Options: Options{Layout: m.layout}}
+	case promptCommit:
+		m.cmd = Command{Kind: KindCommit, Commit: input, Options: Options{Layout: m.layout}}
+	}
+	m.reloadAndReset()
+}
+
+func (m *tuiModel) prepareStashAction(key string) {
+	if len(m.view.Stashes) == 0 || m.cursor >= len(m.view.Stashes) {
+		return
+	}
+	ref := m.view.Stashes[m.cursor].Ref
+	localDirty := ""
+	if lines, err := m.git.StatusShort(); err == nil && len(lines) > 0 {
+		localDirty = "\n\nLocal uncommitted changes exist; conflicts are possible."
+	}
+	switch key {
+	case "a":
+		m.confirmText = "Apply " + ref + "?" + localDirty
+		m.confirmCmd = []string{"stash", "apply", ref}
+	case "p":
+		m.confirmText = "Pop " + ref + "?\nThis applies the stash and removes it if successful." + localDirty
+		m.confirmCmd = []string{"stash", "pop", ref}
+	case "d":
+		m.confirmText = "Drop " + ref + "?\nThis permanently removes the stash."
+		m.confirmCmd = []string{"stash", "drop", ref}
+	}
+	m.overlay = overlayConfirm
+}
+
+func (m *tuiModel) openChangedFilesForSelectedCommit() {
+	if m.cursor >= len(m.view.Commits) {
+		return
+	}
+	commit := m.view.Commits[m.cursor].Hash
+	files, err := m.git.CommitChangedFiles(commit)
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.overlay = overlayChangedFiles
+	m.pickerTitle = "Files changed in " + commit
+	m.pickerItems = files
+	m.pickerCursor = 0
+}
+
+func (m *tuiModel) anchorCommit(hash string) {
+	for i, commit := range m.view.Commits {
+		if commit.Hash == hash {
+			m.cursor = i
+			m.loadHistoryCommit()
+			return
+		}
+	}
+}
+
+func (m *tuiModel) loadHistoryCommit() {
+	if m.cursor >= len(m.view.Commits) || m.cmd.Path == "" {
+		return
+	}
+	commit := m.view.Commits[m.cursor].Hash
+	out, err := m.git.Run("show", "--no-ext-diff", commit, "--", m.cmd.Path)
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.view.Diff = out
+	m.view.GitCommand = "git show --no-ext-diff " + commit + " -- " + m.cmd.Path
+}
+
+func (m *tuiModel) loadCommitFile() {
+	if m.cursor >= len(m.view.Files) {
+		return
+	}
+	file := m.view.Files[m.cursor].Path
+	out, err := m.git.Run("show", "--no-ext-diff", m.cmd.Commit, "--", file)
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.view.Diff = out
+	m.view.GitCommand = "git show --no-ext-diff " + m.cmd.Commit + " -- " + file
+}
+
+func (m *tuiModel) loadSelectedFileDiff() {
+	if m.cursor >= len(m.view.Files) {
+		return
+	}
+	path := m.view.Files[m.cursor].Path
+	out, command, err := m.diffForPath(path)
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	m.view.Diff = out
+	m.view.GitCommand = command
+}
+
+func (m *tuiModel) diffForPath(path string) (string, string, error) {
+	switch m.cmd.Kind {
+	case KindLocal:
+		if m.cmd.Options.LocalMode == "staged" {
+			out, err := m.git.Diff("--staged", "--", path)
+			return out, "git diff --no-ext-diff --staged -- " + path, err
+		}
+		out, err := m.git.Diff("--", path)
+		if strings.TrimSpace(out) == "" {
+			if untracked, untrackedErr := m.git.UntrackedPatch(path); untrackedErr == nil {
+				return untracked, "git diff --no-ext-diff --no-index -- /dev/null " + path, nil
+			}
+		}
+		return out, "git diff --no-ext-diff -- " + path, err
+	case KindCompare:
+		if m.cmd.Target == "" {
+			return m.view.Diff, m.view.GitCommand, nil
+		}
+		target, err := m.git.ResolveRef(m.cmd.Target)
+		if err != nil {
+			return "", "", err
+		}
+		source := "HEAD"
+		if m.cmd.Source != "" {
+			source, err = m.git.ResolveRef(m.cmd.Source)
+			if err != nil {
+				return "", "", err
+			}
+		}
+		arg := target + "..." + source
+		out, err := m.git.Diff(arg, "--", path)
+		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+	case KindAhead:
+		upstream, err := m.git.Upstream()
+		if err != nil {
+			return "", "", err
+		}
+		arg := upstream + "...HEAD"
+		out, err := m.git.Diff(arg, "--", path)
+		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+	case KindBehind:
+		upstream, err := m.git.Upstream()
+		if err != nil {
+			return "", "", err
+		}
+		arg := "HEAD.." + upstream
+		out, err := m.git.Diff(arg, "--", path)
+		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+	case KindRecent:
+		arg := fmt.Sprintf("HEAD~%d..HEAD", m.cmd.Count)
+		out, err := m.git.Diff(arg, "--", path)
+		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+	case KindFile:
+		return m.view.Diff, m.view.GitCommand, nil
+	default:
+		return m.view.Diff, m.view.GitCommand, nil
+	}
+}
+
+func (m *tuiModel) loadStash() {
+	if m.cursor >= len(m.view.Stashes) {
+		return
+	}
+	ref := m.view.Stashes[m.cursor].Ref
+	m.cmd.StashRef = ref
+	m.reloadAndReset()
+}
+
+func (m *tuiModel) closeOverlay() {
+	m.overlay = overlayNone
+	m.pickerItems = nil
+	m.input = ""
+}
+
+func (m tuiModel) itemCount() int {
+	switch m.cmd.Kind {
+	case KindHistory:
+		return len(m.view.Commits)
+	case KindStash:
+		return len(m.view.Stashes)
+	default:
+		return len(m.view.Files)
+	}
+}
+
+func (m tuiModel) sidebarWidth() int {
+	if !m.showSidebar {
+		return 0
+	}
+	width := m.width / 3
+	if width < 28 {
+		return 28
+	}
+	if width > 48 {
+		return 48
+	}
+	return width
+}
+
+func filePaths(files []FileStat) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	return paths
+}
+
+func supportsFilePicker(kind CommandKind) bool {
+	switch kind {
+	case KindLocal, KindCompare, KindRecent:
+		return true
+	default:
+		return false
+	}
+}
+
+func limitLines(lines []string, n int) []string {
+	if len(lines) > n {
+		return lines[:n]
+	}
+	for len(lines) < n {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func placeOverlay(base, overlay string, width, height int) string {
+	if width < 1 || height < 1 {
+		return overlay
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, overlay, lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("236")))
+}
+
+func (m tuiModel) overlayBounds() (left, top, right, bottom int) {
+	overlay := m.renderOverlay()
+	overlayWidth := lipgloss.Width(overlay)
+	overlayHeight := lipgloss.Height(overlay)
+	left = (m.width - overlayWidth) / 2
+	top = (m.height - overlayHeight) / 2
+	if left < 0 {
+		left = 0
+	}
+	if top < 0 {
+		top = 0
+	}
+	return left, top, left + overlayWidth, top + overlayHeight
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

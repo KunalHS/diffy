@@ -1,0 +1,3 @@
+local changes
+between two branches (local first / rely on origin if brnach not present on local, and error if branch name is wrong)
+a particular commit compared to its previous commit (in the current branch history)
