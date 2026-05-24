@@ -24,11 +24,10 @@ const (
 type promptKind string
 
 const (
-	promptCompareTarget   promptKind = "compare-target"
-	promptRecentCount     promptKind = "recent-count"
-	promptFileCompareRefs promptKind = "file-compare-refs"
-	promptHistoryFile     promptKind = "history-file"
-	promptCommit          promptKind = "commit"
+	promptCompareTarget promptKind = "compare-target"
+	promptRecentCount   promptKind = "recent-count"
+	promptHistoryFile   promptKind = "history-file"
+	promptCommit        promptKind = "commit"
 )
 
 const (
@@ -123,7 +122,7 @@ func (m *tuiModel) loadInitial() {
 			return
 		}
 		if !m.hasFileCompareRefs() {
-			m.openPrompt(promptFileCompareRefs, "File compare refs: <ref> [to-ref]")
+			m.openBranchPicker("Choose branch to compare")
 			return
 		}
 	}
@@ -967,15 +966,24 @@ func (m *tuiModel) choosePicker() {
 		m.clearCancelCommand()
 		m.chooseMode(value)
 	case overlayBranch:
-		m.clearCancelCommand()
-		m.cmd.Target = value
-		m.closeOverlay()
-		if m.cmd.Options.FileFlag && m.cmd.Options.FilePath == "" {
-			m.reload()
-			m.openFilePicker("Restrict to file", filePaths(m.view.Files))
-			return
+		if m.cmd.Kind == KindFile {
+			m.clearCancelCommand()
+			m.cmd.Ref = value
+			m.cmd.FromRef = ""
+			m.cmd.ToRef = ""
+			m.closeOverlay()
+			m.reloadAndReset()
+		} else {
+			m.clearCancelCommand()
+			m.cmd.Target = value
+			m.closeOverlay()
+			if m.cmd.Options.FileFlag && m.cmd.Options.FilePath == "" {
+				m.reload()
+				m.openFilePicker("Restrict to file", filePaths(m.view.Files))
+				return
+			}
+			m.reloadAndReset()
 		}
-		m.reloadAndReset()
 	case overlayFile:
 		if m.cmd.Kind == KindHistory {
 			m.clearCancelCommand()
@@ -989,7 +997,7 @@ func (m *tuiModel) choosePicker() {
 				m.clearCancelCommand()
 				m.reloadAndReset()
 			} else {
-				m.openPrompt(promptFileCompareRefs, "File compare refs: <ref> [to-ref]")
+				m.openBranchPicker("Choose branch to compare")
 			}
 		} else {
 			m.clearCancelCommand()
@@ -1074,25 +1082,6 @@ func (m *tuiModel) submitPrompt() {
 			return
 		}
 		m.cmd = Command{Kind: KindRecent, Count: n, Options: Options{Layout: m.layout}}
-	case promptFileCompareRefs:
-		parts := strings.Fields(input)
-		if len(parts) != 1 && len(parts) != 2 {
-			m.err = "file compare needs: <ref> [to-ref]"
-			return
-		}
-		if m.cmd.Path == "" {
-			m.err = "file compare needs a selected file"
-			return
-		}
-		if len(parts) == 1 {
-			m.cmd.Ref = parts[0]
-			m.cmd.FromRef = ""
-			m.cmd.ToRef = ""
-		} else {
-			m.cmd.Ref = ""
-			m.cmd.FromRef = parts[0]
-			m.cmd.ToRef = parts[1]
-		}
 	case promptHistoryFile:
 		m.cmd = Command{Kind: KindHistory, Path: input, Options: Options{Layout: m.layout}}
 	case promptCommit:

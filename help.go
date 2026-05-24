@@ -47,7 +47,7 @@ Commands:
   diffy ahead                                Show local commits not on upstream
   diffy behind                               Show upstream commits missing locally
   diffy recent <count>                       Show changes across last N commits
-  diffy file                                 Pick a file, then compare with refs
+  diffy file                                 Pick a file, then pick a branch to compare
   diffy file <path> <ref>                    Compare working file against a ref
   diffy file <path> <from> <to>              Compare one file across two refs
   diffy stash [stash@{n}]                    Inspect stashes; apply/pop/drop with confirmation
@@ -141,7 +141,11 @@ Examples:
   diffy file
   diffy file main
   diffy file src/App.ts main
-  diffy file src/App.ts HEAD~2 HEAD`
+  diffy file src/App.ts HEAD~2 HEAD
+
+Interactive behavior:
+  without a file path, Diffy opens a file selector first
+  without a ref, Diffy opens a branch selector instead of asking for typed refs`
 }
 
 func stashHelp() string {

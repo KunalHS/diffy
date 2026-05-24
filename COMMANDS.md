@@ -473,6 +473,7 @@ Expected behavior:
 Status: Approved
 
 ```bash
+diffy file
 diffy file <path> <ref>
 ```
 
@@ -480,9 +481,16 @@ Compares the current working version of a file against a branch, commit, or ref.
 
 This command is file-first. It overlaps with `diffy compare ... --file`, but it is kept because it starts from the question: "I know the file, what do I want to compare it against?"
 
+Interactive behavior:
+
+- `diffy file` opens a file selector first, then a branch selector.
+- `diffy file --file <path>` skips the file selector and opens the branch selector.
+- `diffy file <ref>` opens a file selector first, then compares the selected file against that ref.
+
 Examples:
 
 ```bash
+diffy file
 diffy file src/App.ts main
 diffy file src/App.ts HEAD~1
 ```

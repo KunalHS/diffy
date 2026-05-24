@@ -256,7 +256,7 @@ func TestTUIStashSelectionDoesNotResetCursor(t *testing.T) {
 	}
 }
 
-func TestTUIFileCompareUsesFileSelectorBeforeRefs(t *testing.T) {
+func TestTUIFileCompareUsesFileSelectorBeforeBranch(t *testing.T) {
 	repo := newFixtureRepo(t)
 	g := Git{Dir: repo}
 	m := tuiModel{
@@ -278,15 +278,19 @@ func TestTUIFileCompareUsesFileSelectorBeforeRefs(t *testing.T) {
 	}
 
 	m.choosePicker()
-	if m.overlay != overlayPrompt || m.promptKind != promptFileCompareRefs {
-		t.Fatalf("overlay/prompt = %v/%s, want refs prompt", m.overlay, m.promptKind)
+	if m.overlay != overlayBranch {
+		t.Fatalf("overlay = %v, want branch picker", m.overlay)
 	}
 	if m.cmd.Path != "app.txt" {
 		t.Fatalf("selected path = %q, want app.txt", m.cmd.Path)
 	}
+	if !containsString(m.pickerItems, "main") {
+		t.Fatalf("branch picker items = %#v, want main", m.pickerItems)
+	}
 
-	m.input = "main"
-	m.submitPrompt()
+	updated, _ := m.updateOverlayKey("m")
+	m = updated.(tuiModel)
+	m.choosePicker()
 	if m.overlay != overlayNone {
 		t.Fatalf("overlay = %v, want none", m.overlay)
 	}
@@ -295,6 +299,38 @@ func TestTUIFileCompareUsesFileSelectorBeforeRefs(t *testing.T) {
 	}
 	if !strings.Contains(m.view.Diff, "feature line") {
 		t.Fatalf("file compare diff missing expected content:\n%s", m.view.Diff)
+	}
+}
+
+func TestTUIFileCompareWithPathUsesBranchSelector(t *testing.T) {
+	repo := newFixtureRepo(t)
+	g := Git{Dir: repo}
+	m := tuiModel{
+		git:         g,
+		controller:  Controller{Git: g},
+		cmd:         Command{Kind: KindFile, Path: "app.txt", Options: Options{Layout: LayoutSplit}},
+		layout:      LayoutSplit,
+		width:       100,
+		height:      30,
+		showSidebar: true,
+	}
+
+	m.loadInitial()
+	if m.overlay != overlayBranch {
+		t.Fatalf("overlay = %v, want branch picker", m.overlay)
+	}
+	if containsString(m.pickerItems, "app.txt") {
+		t.Fatalf("path was already selected, should not show file picker items: %#v", m.pickerItems)
+	}
+
+	updated, _ := m.updateOverlayKey("m")
+	m = updated.(tuiModel)
+	m.choosePicker()
+	if m.overlay != overlayNone {
+		t.Fatalf("overlay = %v, want none", m.overlay)
+	}
+	if m.cmd.Ref != "main" || m.cmd.Path != "app.txt" || m.view.Mode != KindFile {
+		t.Fatalf("file compare command/view = %#v %#v", m.cmd, m.view)
 	}
 }
 
