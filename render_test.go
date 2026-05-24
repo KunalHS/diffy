@@ -302,8 +302,8 @@ func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 
 	updated, _ = focused.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	scrolled := updated.(tuiModel)
-	if scrolled.hScroll == 0 {
-		t.Fatalf("l key did not advance horizontal scroll")
+	if scrolled.hScroll != diffHorizontalScrollStep {
+		t.Fatalf("l key hScroll = %d, want %d", scrolled.hScroll, diffHorizontalScrollStep)
 	}
 	updated, _ = scrolled.updateKey(tea.KeyMsg{Type: tea.KeyLeft})
 	leftScrolled := updated.(tuiModel)
@@ -318,6 +318,22 @@ func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 	bottom := scrolled.renderBottom()
 	if !strings.Contains(bottom, "h/l scroll") || strings.Contains(bottom, "left/right scroll") {
 		t.Fatalf("diff-focused bottom hint = %q, want h/l scroll only", bottom)
+	}
+}
+
+func TestDiffFocusedJKScrollsByLineStep(t *testing.T) {
+	model := tuiModel{diffFocused: true}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	down := updated.(tuiModel)
+	if down.scroll != diffLineScrollStep {
+		t.Fatalf("j key scroll = %d, want %d", down.scroll, diffLineScrollStep)
+	}
+
+	updated, _ = down.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	up := updated.(tuiModel)
+	if up.scroll != 0 {
+		t.Fatalf("k key should clamp back to 0, got %d", up.scroll)
 	}
 }
 

@@ -31,6 +31,12 @@ const (
 	promptCommit        promptKind = "commit"
 )
 
+const (
+	diffLineScrollStep       = 3
+	diffHorizontalScrollStep = 16
+	pageScrollStep           = 10
+)
+
 type tuiModel struct {
 	cfg        Config
 	git        Git
@@ -159,7 +165,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "up", "k":
 		if m.diffFocused {
-			m.scroll--
+			m.scroll -= diffLineScrollStep
 			if m.scroll < 0 {
 				m.scroll = 0
 			}
@@ -168,27 +174,27 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "down", "j":
 		if m.diffFocused {
-			m.scroll++
+			m.scroll += diffLineScrollStep
 		} else {
 			m.moveCursor(1)
 		}
 	case "left", "h":
 		if m.diffFocused {
-			m.hScroll -= 8
+			m.hScroll -= diffHorizontalScrollStep
 			if m.hScroll < 0 {
 				m.hScroll = 0
 			}
 		}
 	case "l":
 		if m.diffFocused {
-			m.hScroll += 8
+			m.hScroll += diffHorizontalScrollStep
 		} else if m.view.SourceIsCurrent && m.cmd.Kind == KindCompare {
 			m.cmd = Command{Kind: KindLocal, Options: Options{Layout: m.layout}}
 			m.reloadAndReset()
 		}
 	case "right":
 		if m.diffFocused {
-			m.hScroll += 8
+			m.hScroll += diffHorizontalScrollStep
 		}
 	case "z":
 		if m.diffFocused {
@@ -199,12 +205,12 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleAllCollapsedContext()
 		}
 	case "pgup", "b":
-		m.scroll -= 10
+		m.scroll -= pageScrollStep
 		if m.scroll < 0 {
 			m.scroll = 0
 		}
 	case "pgdown", " ":
-		m.scroll += 10
+		m.scroll += pageScrollStep
 	case "f":
 		if m.cmd.Kind == KindHistory {
 			m.openChangedFilesForSelectedCommit()
