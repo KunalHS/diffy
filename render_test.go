@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -228,6 +229,25 @@ func TestSidebarToggleExpandsMainPane(t *testing.T) {
 	}
 }
 
+func TestSidebarToggleWritesState(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	model := tuiModel{
+		showSidebar: true,
+		state:       DiffyState{Path: statePath},
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	toggled := updated.(tuiModel)
+	if toggled.showSidebar {
+		t.Fatalf("sidebar did not toggle closed")
+	}
+
+	state := LoadState(statePath)
+	if state.Sidebar || !state.SidebarSet {
+		t.Fatalf("state sidebar = %t set=%t, want false set", state.Sidebar, state.SidebarSet)
+	}
+}
+
 func TestBottomHintShowsSidebarShortcutAsS(t *testing.T) {
 	model := tuiModel{
 		width: 120,
@@ -257,6 +277,25 @@ func TestGitCommandHiddenFromMainByDefault(t *testing.T) {
 	main := model.renderMain(60, 10)
 	if strings.Contains(main, "git diff -- app.txt") {
 		t.Fatalf("main pane shows git command by default:\n%s", main)
+	}
+}
+
+func TestLayoutToggleWritesState(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	model := tuiModel{
+		layout: LayoutSplit,
+		state:  DiffyState{Path: statePath},
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	unified := updated.(tuiModel)
+	if unified.layout != LayoutUnified {
+		t.Fatalf("layout = %q, want unified", unified.layout)
+	}
+
+	state := LoadState(statePath)
+	if state.Layout != LayoutUnified || !state.LayoutSet {
+		t.Fatalf("state layout = %q set=%t, want unified set", state.Layout, state.LayoutSet)
 	}
 }
 

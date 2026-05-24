@@ -7,6 +7,8 @@ import (
 
 func main() {
 	cfg := LoadConfig()
+	state := LoadState(cfg.StatePath)
+	cfg = ResolveConfig(cfg, state)
 	cmd, err := ParseCommand(os.Args[1:], cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "diffy:", err)
@@ -44,7 +46,7 @@ func main() {
 		return
 	}
 
-	if err := RunTUI(cmd, cfg); err != nil {
+	if err := RunTUI(cmd, cfg, state); err != nil {
 		fmt.Fprintln(os.Stderr, "diffy:", err)
 		os.Exit(1)
 	}

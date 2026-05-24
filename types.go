@@ -56,8 +56,20 @@ type Command struct {
 }
 
 type Config struct {
-	Layout Layout
-	Path   string
+	Layout     Layout
+	LayoutSet  bool
+	Sidebar    bool
+	SidebarSet bool
+	Path       string
+	StatePath  string
+}
+
+type DiffyState struct {
+	Layout     Layout
+	LayoutSet  bool
+	Sidebar    bool
+	SidebarSet bool
+	Path       string
 }
 
 type FileStat struct {

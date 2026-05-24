@@ -39,6 +39,7 @@ const (
 
 type tuiModel struct {
 	cfg        Config
+	state      DiffyState
 	git        Git
 	controller Controller
 	cmd        Command
@@ -72,23 +73,24 @@ type tuiModel struct {
 	expandAllDiff bool
 }
 
-func RunTUI(cmd Command, cfg Config) error {
-	m := newTUIModel(cmd, cfg)
+func RunTUI(cmd Command, cfg Config, state DiffyState) error {
+	m := newTUIModel(cmd, cfg, state)
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := program.Run()
 	return err
 }
 
-func newTUIModel(cmd Command, cfg Config) tuiModel {
+func newTUIModel(cmd Command, cfg Config, state DiffyState) tuiModel {
 	m := tuiModel{
 		cfg:         cfg,
+		state:       state,
 		git:         Git{},
 		controller:  Controller{Git: Git{}},
 		cmd:         cmd,
 		layout:      cmd.Options.Layout,
 		width:       100,
 		height:      30,
-		showSidebar: true,
+		showSidebar: cfg.Sidebar,
 	}
 	m.loadInitial()
 	return m
@@ -225,6 +227,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "s":
 		m.showSidebar = !m.showSidebar
+		m.rememberSidebar()
 	case "g":
 		m.showGitCmd = !m.showGitCmd
 	case "/":
@@ -234,8 +237,10 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pickerCursor = 0
 	case "1":
 		m.layout = LayoutUnified
+		m.rememberLayout()
 	case "2":
 		m.layout = LayoutSplit
+		m.rememberLayout()
 	case "r":
 		m.reloadAndReset()
 	case "c":
@@ -577,6 +582,24 @@ func (m *tuiModel) reloadAndReset() {
 			return
 		}
 		m.err = err.Error()
+	}
+}
+
+func (m *tuiModel) rememberSidebar() {
+	m.state.Sidebar = m.showSidebar
+	m.state.SidebarSet = true
+	m.saveState()
+}
+
+func (m *tuiModel) rememberLayout() {
+	m.state.Layout = m.layout
+	m.state.LayoutSet = true
+	m.saveState()
+}
+
+func (m *tuiModel) saveState() {
+	if err := SaveState(m.state); err != nil {
+		m.message = "Could not save state: " + err.Error()
 	}
 }
 
