@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Diffy Feedback Fix Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1020;
+        --panel: #111827;
+        --text: #f8fafc;
+        --muted: #cbd5e1;
+        --line: #334155;
+        --green: #86efac;
+        --red: #fda4af;
+        --yellow: #fde68a;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 32px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      p, li {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+      video {
+        display: block;
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #000;
+        margin: 24px 0;
+      }
+      section {
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+        margin-top: 24px;
+      }
+      code {
+        color: var(--yellow);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .green { color: var(--green); }
+      .red { color: var(--red); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Diffy Feedback Fix Demo</h1>
+      <p>
+        This is the new demo for the feedback pass: stronger diff colors, silent left/right arrow support,
+        and working collapse/expand backed by richer TUI diff context.
+      </p>
+
+      <video controls src="diffy-feedback-demo.mp4"></video>
+
+      <section>
+        <h2>Fixed</h2>
+        <ul>
+          <li><span class="green">Additions</span> and <span class="red">deletions</span> now use stronger foreground/background colors.</li>
+          <li>Left and right arrow keys now scroll horizontally in diff focus, while the footer still only shows <code>h/l</code>.</li>
+          <li><code>z</code> toggles the collapsed context nearest the current scroll position.</li>
+          <li><code>Z</code> expands all collapsed context, and pressing <code>Z</code> again collapses all.</li>
+          <li>TUI diffs now use <code>--unified=80</code> so there is enough unchanged context to collapse/expand.</li>
+          <li><code>--raw</code> keeps raw Git output and does not add the TUI context flag.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Verification</h2>
+        <ul>
+          <li><code>go test -count=1 ./...</code> passed.</li>
+          <li><code>go build ./...</code> passed.</li>
+          <li><code>go run . --summary</code> worked after the feedback fixes.</li>
+          <li><code>go run . --raw --file render.go</code> confirmed raw patch output still works.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

@@ -14,6 +14,8 @@ type Git struct {
 	Dir string
 }
 
+const diffyTUIContextLines = "80"
+
 func (g Git) Run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if g.Dir != "" {
@@ -170,6 +172,14 @@ func (g Git) Diff(args ...string) (string, error) {
 	return g.Run(append([]string{"diff", "--no-ext-diff"}, args...)...)
 }
 
+func (g Git) DiffForTUI(args ...string) (string, error) {
+	return g.Run(append([]string{"diff", "--no-ext-diff", "--unified=" + diffyTUIContextLines}, args...)...)
+}
+
+func (g Git) ShowForTUI(args ...string) (string, error) {
+	return g.Run(append([]string{"show", "--no-ext-diff", "--unified=" + diffyTUIContextLines}, args...)...)
+}
+
 func (g Git) StashList() ([]StashItem, error) {
 	out, err := g.Run("stash", "list")
 	if err != nil {
@@ -233,6 +243,13 @@ func (g Git) UntrackedPatch(path string) (string, error) {
 		return "", errors.New("empty path")
 	}
 	return g.RunAllowExitOne("diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path)
+}
+
+func (g Git) UntrackedPatchForTUI(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("empty path")
+	}
+	return g.RunAllowExitOne("diff", "--no-ext-diff", "--no-index", "--unified="+diffyTUIContextLines, "--", "/dev/null", path)
 }
 
 func (g Git) UntrackedStat(path string) FileStat {

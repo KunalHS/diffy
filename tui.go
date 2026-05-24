@@ -38,30 +38,32 @@ type tuiModel struct {
 	cmd        Command
 	view       ViewData
 
-	width        int
-	height       int
-	cursor       int
-	stashCursor  int
-	commitCursor int
-	scroll       int
-	hScroll      int
-	layout       Layout
-	overlay      overlayKind
-	pickerTitle  string
-	pickerItems  []string
-	pickerCursor int
-	pickerScroll int
-	promptKind   promptKind
-	promptTitle  string
-	input        string
-	confirmText  string
-	confirmCmd   []string
-	message      string
-	err          string
-	lastHistory  *Command
-	showSidebar  bool
-	showGitCmd   bool
-	diffFocused  bool
+	width         int
+	height        int
+	cursor        int
+	stashCursor   int
+	commitCursor  int
+	scroll        int
+	hScroll       int
+	layout        Layout
+	overlay       overlayKind
+	pickerTitle   string
+	pickerItems   []string
+	pickerCursor  int
+	pickerScroll  int
+	promptKind    promptKind
+	promptTitle   string
+	input         string
+	confirmText   string
+	confirmCmd    []string
+	message       string
+	err           string
+	lastHistory   *Command
+	showSidebar   bool
+	showGitCmd    bool
+	diffFocused   bool
+	expandedDiff  map[string]bool
+	expandAllDiff bool
 }
 
 func RunTUI(cmd Command, cfg Config) error {
@@ -170,7 +172,7 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.moveCursor(1)
 		}
-	case "h":
+	case "left", "h":
 		if m.diffFocused {
 			m.hScroll -= 8
 			if m.hScroll < 0 {
@@ -183,6 +185,18 @@ func (m tuiModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.view.SourceIsCurrent && m.cmd.Kind == KindCompare {
 			m.cmd = Command{Kind: KindLocal, Options: Options{Layout: m.layout}}
 			m.reloadAndReset()
+		}
+	case "right":
+		if m.diffFocused {
+			m.hScroll += 8
+		}
+	case "z":
+		if m.diffFocused {
+			m.toggleNearestCollapsedContext()
+		}
+	case "Z":
+		if m.diffFocused {
+			m.toggleAllCollapsedContext()
 		}
 	case "pgup", "b":
 		m.scroll -= 10
@@ -305,6 +319,7 @@ func (m tuiModel) updateMouse(msg tea.MouseMsg) tuiModel {
 					m.cursor = idx
 					m.diffFocused = false
 					m.hScroll = 0
+					m.resetDiffExpansion()
 					m.selectCurrentItem()
 				}
 			}
@@ -454,7 +469,7 @@ func (m tuiModel) renderSidebar(width, height int) string {
 
 func (m tuiModel) renderMain(width, height int) string {
 	diffWidth := width - 2
-	lines := RenderDiffViewport(m.view.Diff, m.layout, diffWidth, m.hScroll)
+	lines := RenderDiffViewportWithOptions(m.view.Diff, m.layout, diffWidth, m.hScroll, m.diffRenderOptions())
 	if m.scroll > len(lines) {
 		m.scroll = len(lines)
 	}
@@ -479,7 +494,7 @@ func (m tuiModel) renderBottom() string {
 		gitHint = "g hide git"
 	}
 	if m.diffFocused {
-		hints = []string{"q quit", "/ modes", "esc files", "j/k scroll", "h/l scroll", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
+		hints = []string{"q quit", "/ modes", "esc files", "j/k scroll", "h/l scroll", "z fold", "Z all", "enter files", "s sidebar", gitHint, "1 unified", "2 split", "r refresh"}
 	} else {
 		hints = []string{"q quit", "/ modes"}
 		if m.canClearFileRestriction() {
@@ -547,6 +562,7 @@ func (m *tuiModel) reloadAndReset() {
 	m.scroll = 0
 	m.hScroll = 0
 	m.diffFocused = false
+	m.resetDiffExpansion()
 	m.cursor = 0
 	if err := m.reload(); err != nil {
 		var pickerErr pickerNeededError
@@ -572,6 +588,7 @@ func (m *tuiModel) moveCursor(delta int) {
 	}
 	m.scroll = 0
 	m.hScroll = 0
+	m.resetDiffExpansion()
 	if m.cmd.Kind == KindHistory {
 		m.loadHistoryCommit()
 	} else if m.cmd.Kind == KindCommit {
@@ -589,6 +606,84 @@ func (m *tuiModel) focusDiff() {
 		return
 	}
 	m.diffFocused = true
+}
+
+func (m tuiModel) diffRenderOptions() DiffRenderOptions {
+	return DiffRenderOptions{
+		Expanded:  m.expandedDiff,
+		ExpandAll: m.expandAllDiff,
+	}
+}
+
+func (m *tuiModel) resetDiffExpansion() {
+	m.expandedDiff = nil
+	m.expandAllDiff = false
+}
+
+func (m *tuiModel) toggleNearestCollapsedContext() {
+	if strings.TrimSpace(m.view.Diff) == "" {
+		return
+	}
+	target, ok := nearestCollapsedTarget(CollapsedContextTargets(m.view.Diff, m.layout, DiffRenderOptions{}), m.scroll)
+	if !ok {
+		m.message = "No collapsible context."
+		return
+	}
+	if m.expandedDiff == nil {
+		m.expandedDiff = map[string]bool{}
+	}
+	if m.expandAllDiff {
+		m.expandAllDiff = false
+	}
+	if m.expandedDiff[target.Key] {
+		delete(m.expandedDiff, target.Key)
+		m.message = "Collapsed context."
+		return
+	}
+	m.expandedDiff[target.Key] = true
+	m.message = "Expanded context."
+}
+
+func (m *tuiModel) toggleAllCollapsedContext() {
+	if strings.TrimSpace(m.view.Diff) == "" {
+		return
+	}
+	if len(CollapsedContextTargets(m.view.Diff, m.layout, DiffRenderOptions{})) == 0 {
+		m.message = "No collapsible context."
+		return
+	}
+	if m.expandAllDiff {
+		m.expandAllDiff = false
+		m.expandedDiff = nil
+		m.message = "Collapsed all context."
+		return
+	}
+	m.expandAllDiff = true
+	m.expandedDiff = nil
+	m.message = "Expanded all context."
+}
+
+func nearestCollapsedTarget(targets []CollapsedContextTarget, line int) (CollapsedContextTarget, bool) {
+	if len(targets) == 0 {
+		return CollapsedContextTarget{}, false
+	}
+	best := targets[0]
+	bestDistance := absInt(best.Line - line)
+	for _, target := range targets[1:] {
+		distance := absInt(target.Line - line)
+		if distance < bestDistance {
+			best = target
+			bestDistance = distance
+		}
+	}
+	return best, true
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (m *tuiModel) selectCurrentItem() {
@@ -814,13 +909,13 @@ func (m *tuiModel) loadHistoryCommit() {
 		return
 	}
 	commit := m.view.Commits[m.cursor].Hash
-	out, err := m.git.Run("show", "--no-ext-diff", commit, "--", m.cmd.Path)
+	out, err := m.git.ShowForTUI(commit, "--", m.cmd.Path)
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
 	m.view.Diff = out
-	m.view.GitCommand = "git show --no-ext-diff " + commit + " -- " + m.cmd.Path
+	m.view.GitCommand = showCommandForView(m.cmd, commit, "--", m.cmd.Path)
 }
 
 func (m *tuiModel) loadCommitFile() {
@@ -828,13 +923,13 @@ func (m *tuiModel) loadCommitFile() {
 		return
 	}
 	file := m.view.Files[m.cursor].Path
-	out, err := m.git.Run("show", "--no-ext-diff", m.cmd.Commit, "--", file)
+	out, err := m.git.ShowForTUI(m.cmd.Commit, "--", file)
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
 	m.view.Diff = out
-	m.view.GitCommand = "git show --no-ext-diff " + m.cmd.Commit + " -- " + file
+	m.view.GitCommand = showCommandForView(m.cmd, m.cmd.Commit, "--", file)
 }
 
 func (m *tuiModel) loadSelectedFileDiff() {
@@ -855,16 +950,18 @@ func (m *tuiModel) diffForPath(path string) (string, string, error) {
 	switch m.cmd.Kind {
 	case KindLocal:
 		if m.cmd.Options.LocalMode == "staged" {
-			out, err := m.git.Diff("--staged", "--", path)
-			return out, "git diff --no-ext-diff --staged -- " + path, err
+			args := []string{"--staged", "--", path}
+			out, err := m.git.DiffForTUI(args...)
+			return out, diffCommandForView(m.cmd, args...), err
 		}
-		out, err := m.git.Diff("--", path)
+		args := []string{"--", path}
+		out, err := m.git.DiffForTUI(args...)
 		if strings.TrimSpace(out) == "" {
-			if untracked, untrackedErr := m.git.UntrackedPatch(path); untrackedErr == nil {
-				return untracked, "git diff --no-ext-diff --no-index -- /dev/null " + path, nil
+			if untracked, untrackedErr := m.git.UntrackedPatchForTUI(path); untrackedErr == nil {
+				return untracked, "git diff --no-ext-diff --no-index --unified=" + diffyTUIContextLines + " -- /dev/null " + path, nil
 			}
 		}
-		return out, "git diff --no-ext-diff -- " + path, err
+		return out, diffCommandForView(m.cmd, args...), err
 	case KindCompare:
 		if m.cmd.Target == "" {
 			return m.view.Diff, m.view.GitCommand, nil
@@ -881,28 +978,32 @@ func (m *tuiModel) diffForPath(path string) (string, string, error) {
 			}
 		}
 		arg := target + "..." + source
-		out, err := m.git.Diff(arg, "--", path)
-		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+		args := []string{arg, "--", path}
+		out, err := m.git.DiffForTUI(args...)
+		return out, diffCommandForView(m.cmd, args...), err
 	case KindAhead:
 		upstream, err := m.git.Upstream()
 		if err != nil {
 			return "", "", err
 		}
 		arg := upstream + "...HEAD"
-		out, err := m.git.Diff(arg, "--", path)
-		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+		args := []string{arg, "--", path}
+		out, err := m.git.DiffForTUI(args...)
+		return out, diffCommandForView(m.cmd, args...), err
 	case KindBehind:
 		upstream, err := m.git.Upstream()
 		if err != nil {
 			return "", "", err
 		}
 		arg := "HEAD.." + upstream
-		out, err := m.git.Diff(arg, "--", path)
-		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+		args := []string{arg, "--", path}
+		out, err := m.git.DiffForTUI(args...)
+		return out, diffCommandForView(m.cmd, args...), err
 	case KindRecent:
 		arg := fmt.Sprintf("HEAD~%d..HEAD", m.cmd.Count)
-		out, err := m.git.Diff(arg, "--", path)
-		return out, "git diff --no-ext-diff " + arg + " -- " + path, err
+		args := []string{arg, "--", path}
+		out, err := m.git.DiffForTUI(args...)
+		return out, diffCommandForView(m.cmd, args...), err
 	case KindFile:
 		return m.view.Diff, m.view.GitCommand, nil
 	default:

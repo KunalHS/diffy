@@ -75,12 +75,12 @@ func (c Controller) buildLocal(cmd Command) (ViewData, error) {
 			return ViewData{}, err
 		}
 		stats = staged
-		diff, err := c.Git.Diff(args...)
+		diff, err := c.diffForView(cmd, args...)
 		if err != nil {
 			return ViewData{}, err
 		}
 		diffParts = append(diffParts, diff)
-		gitCommand = "git diff --no-ext-diff --staged"
+		gitCommand = diffCommandForView(cmd, args...)
 	} else {
 		args := []string{}
 		if path != "" {
@@ -90,13 +90,13 @@ func (c Controller) buildLocal(cmd Command) (ViewData, error) {
 		if err != nil {
 			return ViewData{}, err
 		}
-		diff, err := c.Git.Diff(args...)
+		diff, err := c.diffForView(cmd, args...)
 		if err != nil {
 			return ViewData{}, err
 		}
 		stats = unstaged
 		diffParts = append(diffParts, diff)
-		gitCommand = "git diff --no-ext-diff"
+		gitCommand = diffCommandForView(cmd, args...)
 
 		untracked, err := c.Git.UntrackedFiles()
 		if err == nil {
@@ -106,7 +106,7 @@ func (c Controller) buildLocal(cmd Command) (ViewData, error) {
 					continue
 				}
 				untrackedStats = append(untrackedStats, c.Git.UntrackedStat(file))
-				patch, patchErr := c.Git.UntrackedPatch(file)
+				patch, patchErr := c.untrackedPatchForView(cmd, file)
 				if patchErr == nil && strings.TrimSpace(patch) != "" {
 					diffParts = append(diffParts, patch)
 				}
@@ -161,7 +161,7 @@ func (c Controller) buildCompare(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Diff(args...)
+	diff, err := c.diffForView(cmd, args...)
 	if err != nil {
 		return ViewData{}, err
 	}
@@ -173,7 +173,7 @@ func (c Controller) buildCompare(cmd Command) (ViewData, error) {
 	return ViewData{
 		Title:           title,
 		Subtitle:        fmt.Sprintf("%s -> %s", displaySource(cmd, source), target),
-		GitCommand:      "git diff --no-ext-diff " + strings.Join(args, " "),
+		GitCommand:      diffCommandForView(cmd, args...),
 		Files:           stats,
 		Commits:         commits,
 		Diff:            diff,
@@ -193,7 +193,7 @@ func (c Controller) buildAhead(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Diff(args...)
+	diff, err := c.diffForView(cmd, args...)
 	if err != nil {
 		return ViewData{}, err
 	}
@@ -201,7 +201,7 @@ func (c Controller) buildAhead(cmd Command) (ViewData, error) {
 	return ViewData{
 		Title:           "Ahead of upstream",
 		Subtitle:        c.Git.CurrentBranch() + " -> " + upstream,
-		GitCommand:      "git diff --no-ext-diff " + upstream + "...HEAD",
+		GitCommand:      diffCommandForView(cmd, args...),
 		Files:           stats,
 		Commits:         commits,
 		Diff:            diff,
@@ -220,7 +220,7 @@ func (c Controller) buildBehind(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Diff(args...)
+	diff, err := c.diffForView(cmd, args...)
 	if err != nil {
 		return ViewData{}, err
 	}
@@ -228,7 +228,7 @@ func (c Controller) buildBehind(cmd Command) (ViewData, error) {
 	return ViewData{
 		Title:      "Behind upstream",
 		Subtitle:   upstream + " -> " + c.Git.CurrentBranch(),
-		GitCommand: "git diff --no-ext-diff HEAD.." + upstream,
+		GitCommand: diffCommandForView(cmd, args...),
 		Files:      stats,
 		Commits:    commits,
 		Diff:       diff,
@@ -247,7 +247,7 @@ func (c Controller) buildRecent(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Diff(args...)
+	diff, err := c.diffForView(cmd, args...)
 	if err != nil {
 		return ViewData{}, err
 	}
@@ -255,7 +255,7 @@ func (c Controller) buildRecent(cmd Command) (ViewData, error) {
 	return ViewData{
 		Title:          fmt.Sprintf("Recent %d commits", cmd.Count),
 		Subtitle:       base + "..HEAD",
-		GitCommand:     "git diff --no-ext-diff " + strings.Join(args, " "),
+		GitCommand:     diffCommandForView(cmd, args...),
 		Files:          stats,
 		Commits:        commits,
 		Diff:           diff,
@@ -290,14 +290,14 @@ func (c Controller) buildFile(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Diff(args...)
+	diff, err := c.diffForView(cmd, args...)
 	if err != nil {
 		return ViewData{}, err
 	}
 	return ViewData{
 		Title:          title,
 		Subtitle:       cmd.Path,
-		GitCommand:     "git diff --no-ext-diff " + strings.Join(args, " "),
+		GitCommand:     diffCommandForView(cmd, args...),
 		Files:          stats,
 		Diff:           diff,
 		Mode:           KindFile,
@@ -318,14 +318,14 @@ func (c Controller) buildStash(cmd Command) (ViewData, error) {
 		return ViewData{Title: "Stash", Subtitle: "no stashes", Mode: KindStash, Message: "No stashes found."}, nil
 	}
 	stats, _ := c.Git.StashNumstat(ref)
-	diff, err := c.Git.Run("stash", "show", "--no-ext-diff", "-p", ref)
+	diff, err := c.stashPatchForView(cmd, ref)
 	if err != nil {
 		return ViewData{}, err
 	}
 	return ViewData{
 		Title:      "Stash",
 		Subtitle:   ref,
-		GitCommand: "git stash show --no-ext-diff -p " + ref,
+		GitCommand: stashCommandForView(cmd, ref),
 		Files:      stats,
 		Stashes:    stashes,
 		Diff:       diff,
@@ -346,10 +346,10 @@ func (c Controller) buildHistory(cmd Command) (ViewData, error) {
 	subtitle := cmd.Path
 	gitCommand := "git log --oneline --follow -- " + cmd.Path
 	if len(commits) > 0 {
-		out, err := c.Git.Run("show", "--no-ext-diff", commits[0].Hash, "--", cmd.Path)
+		out, err := c.showForView(cmd, commits[0].Hash, "--", cmd.Path)
 		if err == nil {
 			diff = out
-			gitCommand = "git show --no-ext-diff " + commits[0].Hash + " -- " + cmd.Path
+			gitCommand = showCommandForView(cmd, commits[0].Hash, "--", cmd.Path)
 		}
 	}
 	return ViewData{
@@ -368,18 +368,73 @@ func (c Controller) buildCommit(cmd Command) (ViewData, error) {
 	if err != nil {
 		return ViewData{}, err
 	}
-	diff, err := c.Git.Run("show", "--no-ext-diff", cmd.Commit)
+	diff, err := c.showForView(cmd, cmd.Commit)
 	if err != nil {
 		return ViewData{}, err
 	}
 	return ViewData{
 		Title:      "Commit",
 		Subtitle:   c.Git.CommitSubject(cmd.Commit),
-		GitCommand: "git show --no-ext-diff " + cmd.Commit,
+		GitCommand: showCommandForView(cmd, cmd.Commit),
 		Files:      files,
 		Diff:       diff,
 		Mode:       KindCommit,
 	}, nil
+}
+
+func (c Controller) diffForView(cmd Command, args ...string) (string, error) {
+	if cmd.Options.Raw {
+		return c.Git.Diff(args...)
+	}
+	return c.Git.DiffForTUI(args...)
+}
+
+func (c Controller) showForView(cmd Command, args ...string) (string, error) {
+	if cmd.Options.Raw {
+		return c.Git.Run(append([]string{"show", "--no-ext-diff"}, args...)...)
+	}
+	return c.Git.ShowForTUI(args...)
+}
+
+func (c Controller) stashPatchForView(cmd Command, ref string) (string, error) {
+	if cmd.Options.Raw {
+		return c.Git.Run("stash", "show", "--no-ext-diff", "-p", ref)
+	}
+	return c.Git.Run("stash", "show", "--no-ext-diff", "-p", "--unified="+diffyTUIContextLines, ref)
+}
+
+func (c Controller) untrackedPatchForView(cmd Command, path string) (string, error) {
+	if cmd.Options.Raw {
+		return c.Git.UntrackedPatch(path)
+	}
+	return c.Git.UntrackedPatchForTUI(path)
+}
+
+func diffCommandForView(cmd Command, args ...string) string {
+	parts := []string{"git", "diff", "--no-ext-diff"}
+	if !cmd.Options.Raw {
+		parts = append(parts, "--unified="+diffyTUIContextLines)
+	}
+	parts = append(parts, args...)
+	return strings.Join(parts, " ")
+}
+
+func showCommandForView(cmd Command, args ...string) string {
+	parts := []string{"git", "show", "--no-ext-diff"}
+	if !cmd.Options.Raw {
+		parts = append(parts, "--unified="+diffyTUIContextLines)
+	}
+	parts = append(parts, args...)
+	return strings.Join(parts, " ")
+}
+
+func stashCommandForView(cmd Command, ref string) string {
+	parts := []string{"git", "stash", "show", "--no-ext-diff", "-p"}
+	if !cmd.Options.Raw {
+		parts = append(parts, "--unified="+diffyTUIContextLines)
+	}
+	parts = append(parts, ref)
+	return strings.Join(parts, " ")
 }
 
 func (c Controller) logRange(from, to string) ([]CommitItem, error) {

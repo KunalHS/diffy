@@ -41,11 +41,19 @@ func TestControllerLocalCompareRecentHistoryCommitAndStash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compare build failed: %v", err)
 	}
-	if compare.GitCommand != "git diff --no-ext-diff main...HEAD" {
+	if compare.GitCommand != "git diff --no-ext-diff --unified=80 main...HEAD" {
 		t.Fatalf("compare git command = %q", compare.GitCommand)
 	}
 	if !hasPath(compare.Files, "app.txt") {
 		t.Fatalf("compare files = %#v, want app.txt", compare.Files)
+	}
+
+	rawCompare, err := c.Build(Command{Kind: KindCompare, Target: "main", Options: Options{Layout: LayoutSplit, Raw: true}})
+	if err != nil {
+		t.Fatalf("raw compare build failed: %v", err)
+	}
+	if rawCompare.GitCommand != "git diff --no-ext-diff main...HEAD" {
+		t.Fatalf("raw compare git command = %q", rawCompare.GitCommand)
 	}
 
 	recent, err := c.Build(Command{Kind: KindRecent, Count: 1, Options: Options{Layout: LayoutSplit}})

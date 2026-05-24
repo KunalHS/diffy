@@ -35,7 +35,7 @@ index 0000000..4a77c9a
 
 	lines := RenderDiff(diff, LayoutSplit, 80)
 	joined := strings.Join(lines, "\n")
-	for _, hidden := range []string{"diff --git", "new file mode", "index 0000000", "--- /dev/null", "+++ b/COMMANDS.md"} {
+	for _, hidden := range []string{"diff --git", "new file mode", "index 0000000", "--- /dev/null", "+++ b/COMMANDS.md", "@@ -0,0"} {
 		if strings.Contains(joined, hidden) {
 			t.Fatalf("split render still shows %q:\n%s", hidden, joined)
 		}
@@ -59,7 +59,7 @@ index 0000000..f738756
 	for _, layout := range []Layout{LayoutSplit, LayoutUnified} {
 		lines := RenderDiff(diff, layout, 100)
 		joined := strings.Join(lines, "\n")
-		for _, hidden := range []string{"diff --git", "new file mode", "index 0000000", "--- /dev/null", "+++ b/PLAN.md"} {
+		for _, hidden := range []string{"diff --git", "new file mode", "index 0000000", "--- /dev/null", "+++ b/PLAN.md", "@@ -0,0"} {
 			if strings.Contains(joined, hidden) {
 				t.Fatalf("%s render still shows %q:\n%s", layout, hidden, joined)
 			}
@@ -67,6 +67,70 @@ index 0000000..f738756
 		if !strings.Contains(joined, "# Diffy Plan") {
 			t.Fatalf("%s render removed actual content:\n%s", layout, joined)
 		}
+	}
+}
+
+func TestSplitRenderUsesPaneDividerNotTextPipe(t *testing.T) {
+	diff := `diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,2 +1,2 @@
+ same
+-old
++new`
+
+	lines := RenderDiff(diff, LayoutSplit, 100)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, " | ") {
+		t.Fatalf("split render uses text pipe divider:\n%s", joined)
+	}
+	if !strings.Contains(joined, "│") {
+		t.Fatalf("split render missing pane boundary:\n%s", joined)
+	}
+}
+
+func TestUnifiedRenderUsesLineNumberGutters(t *testing.T) {
+	diff := `diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -7,2 +7,2 @@
+ same
+-old
++new`
+
+	lines := RenderDiff(diff, LayoutUnified, 80)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"  7   7", "  8     - old", "      8 + new"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("unified render missing gutter/content %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestRenderCollapsesAndExpandsContext(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString(`diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,14 +1,14 @@
+-before
++after
+`)
+	for i := 0; i < 10; i++ {
+		builder.WriteString(" same line\n")
+	}
+	builder.WriteString(`-old end
++new end`)
+
+	diff := builder.String()
+	collapsed := strings.Join(RenderDiffViewportWithOptions(diff, LayoutUnified, 100, 0, DiffRenderOptions{}), "\n")
+	if !strings.Contains(collapsed, "... ") || !strings.Contains(collapsed, "unchanged lines") {
+		t.Fatalf("large context did not collapse:\n%s", collapsed)
+	}
+
+	expanded := strings.Join(RenderDiffViewportWithOptions(diff, LayoutUnified, 100, 0, DiffRenderOptions{ExpandAll: true}), "\n")
+	if strings.Contains(expanded, "unchanged lines") {
+		t.Fatalf("expanded render still has collapsed context:\n%s", expanded)
 	}
 }
 
@@ -203,9 +267,68 @@ func TestEnterFocusesDiffAndLScrolls(t *testing.T) {
 	if scrolled.hScroll == 0 {
 		t.Fatalf("l key did not advance horizontal scroll")
 	}
+	updated, _ = scrolled.updateKey(tea.KeyMsg{Type: tea.KeyLeft})
+	leftScrolled := updated.(tuiModel)
+	if leftScrolled.hScroll >= scrolled.hScroll {
+		t.Fatalf("left arrow did not reduce horizontal scroll: before=%d after=%d", scrolled.hScroll, leftScrolled.hScroll)
+	}
+	updated, _ = leftScrolled.updateKey(tea.KeyMsg{Type: tea.KeyRight})
+	rightScrolled := updated.(tuiModel)
+	if rightScrolled.hScroll <= leftScrolled.hScroll {
+		t.Fatalf("right arrow did not advance horizontal scroll: before=%d after=%d", leftScrolled.hScroll, rightScrolled.hScroll)
+	}
 	bottom := scrolled.renderBottom()
 	if !strings.Contains(bottom, "h/l scroll") || strings.Contains(bottom, "left/right scroll") {
 		t.Fatalf("diff-focused bottom hint = %q, want h/l scroll only", bottom)
+	}
+}
+
+func TestZAndShiftZToggleCollapsedContext(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString(`diff --git a/app.txt b/app.txt
+--- a/app.txt
++++ b/app.txt
+@@ -1,14 +1,14 @@
+-before
++after
+`)
+	for i := 0; i < 10; i++ {
+		builder.WriteString(" same line\n")
+	}
+	builder.WriteString(`-old end
++new end`)
+
+	model := tuiModel{
+		width:       120,
+		height:      30,
+		cmd:         Command{Kind: KindLocal},
+		layout:      LayoutUnified,
+		diffFocused: true,
+		view:        ViewData{Diff: builder.String()},
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	expanded := updated.(tuiModel)
+	if len(expanded.expandedDiff) == 0 {
+		t.Fatalf("z did not expand a collapsed context")
+	}
+
+	updated, _ = expanded.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	collapsed := updated.(tuiModel)
+	if len(collapsed.expandedDiff) != 0 {
+		t.Fatalf("second z did not collapse nearest context: %#v", collapsed.expandedDiff)
+	}
+
+	updated, _ = collapsed.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
+	all := updated.(tuiModel)
+	if !all.expandAllDiff {
+		t.Fatalf("Z did not toggle expand-all context")
+	}
+
+	updated, _ = all.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
+	none := updated.(tuiModel)
+	if none.expandAllDiff {
+		t.Fatalf("second Z did not collapse all context")
 	}
 }
 
@@ -224,7 +347,7 @@ func TestDiffViewportClipsInsteadOfTildeTruncating(t *testing.T) {
 	}
 
 	scrolled := strings.Join(RenderDiffViewport(diff, LayoutUnified, 24, 10), "\n")
-	if !strings.Contains(scrolled, "klmnopqrstuvwxyz") {
+	if !strings.Contains(scrolled, "klmnopqrst") {
 		t.Fatalf("horizontal viewport did not expose later content:\n%s", scrolled)
 	}
 }
